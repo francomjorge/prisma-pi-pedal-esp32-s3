@@ -2,5 +2,5 @@ cmake_minimum_required(VERSION 3.16)
 
 set(COMPONENTS main)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-set(PROJECT_VER "0.9.3-core4e")
-project(prisma_pi_pedal_core4e)
+set(PROJECT_VER "0.9.4-core4f")
+project(prisma_pi_pedal_core4f)
