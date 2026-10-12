@@ -3,7 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES esp_wifi esp_event esp_netif nvs_flash esp_http_server esp_driver_gpio esp_driver_spi esp_driver_i2c esp_lcd esp_partition spiffs json mdns lwip esp_timer esp_jpeg
     PRIV_REQUIRES esp_app_format
-    EMBED_TXTFILES "web/index.html" "web/style.css" "web/admin.html"
+    EMBED_TXTFILES "web/index.html" "web/style.css" "web/admin.html" "web/process.html"
 )
 
 target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=httpd_start")
