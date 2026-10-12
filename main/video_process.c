@@ -10,10 +10,10 @@
 #include "esp_timer.h"
 #include "jpeg_decoder.h"
 
+#include "poster_config.h"
 #include "video_ab.h"
 
 #define MAX_TEST_FRAMES 180
-#define VIDEO_TARGET_LONG_SIDE 640u
 #define VIDEO_PSRAM_RESERVE (2u * 1024u * 1024u)
 
 typedef struct {
@@ -28,8 +28,11 @@ static frame_ref_t g_frames[MAX_TEST_FRAMES];
 static uint16_t g_frame_count;
 static uint16_t *g_decode;
 static uint8_t *g_index;
-static size_t g_capacity_pixels;
-static uint8_t g_min_div = 1;
+static size_t g_decode_capacity_pixels;
+static size_t g_index_capacity_pixels;
+static uint16_t g_target_w;
+static uint16_t g_target_h;
+static uint8_t g_decode_div = 1;
 static prisma_video_process_status_t g_status;
 
 static void *psram_alloc(size_t bytes)
@@ -85,28 +88,6 @@ static bool baseline_size(const uint8_t *buf, size_t len, uint16_t *width, uint1
     return false;
 }
 
-static bool valid_div(uint8_t div)
-{
-    return div == 1 || div == 2 || div == 4 || div == 8;
-}
-
-static uint8_t choose_scale(uint16_t width, uint16_t height)
-{
-    const uint8_t divs[] = {1, 2, 4, 8};
-    size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    size_t budget = free_psram > VIDEO_PSRAM_RESERVE ? free_psram - VIDEO_PSRAM_RESERVE : 0;
-    for (size_t i = 0; i < sizeof(divs); ++i) {
-        uint8_t div = divs[i];
-        uint32_t w = width / div;
-        uint32_t h = height / div;
-        size_t pixels = (size_t)w * h;
-        size_t working = pixels * (sizeof(uint16_t) + sizeof(uint8_t));
-        uint32_t long_side = w > h ? w : h;
-        if (w && h && long_side <= VIDEO_TARGET_LONG_SIDE && working <= budget) return div;
-    }
-    return 0;
-}
-
 static esp_jpeg_image_scale_t scale_enum(uint8_t div)
 {
     switch (div) {
@@ -141,6 +122,37 @@ static inline uint8_t poster_index(uint16_t c)
     return (uint8_t)((rl << 4) | (gl << 2) | bl);
 }
 
+static uint8_t choose_decode_div(uint16_t src_w, uint16_t src_h,
+                                 uint16_t target_w, uint16_t target_h,
+                                 size_t budget)
+{
+    const uint8_t divs[] = {8, 4, 2, 1};
+    uint16_t need_w = target_w < src_w ? target_w : src_w;
+    uint16_t need_h = target_h < src_h ? target_h : src_h;
+    size_t out_bytes = (size_t)target_w * target_h;
+
+    for (size_t i = 0; i < sizeof(divs); ++i) {
+        uint8_t div = divs[i];
+        uint16_t w = src_w / div;
+        uint16_t h = src_h / div;
+        if (!w || !h || w < need_w || h < need_h) continue;
+        size_t working = (size_t)w * h * sizeof(uint16_t) + out_bytes;
+        if (working <= budget) return div;
+    }
+
+    /* Last-resort quality reduction: preserve configured output size and upscale
+       from a smaller decoded frame if memory pressure requires it. */
+    for (size_t i = 0; i < sizeof(divs); ++i) {
+        uint8_t div = divs[i];
+        uint16_t w = src_w / div;
+        uint16_t h = src_h / div;
+        if (!w || !h) continue;
+        size_t working = (size_t)w * h * sizeof(uint16_t) + out_bytes;
+        if (working <= budget) return div;
+    }
+    return 0;
+}
+
 static void release_working_set(void)
 {
     free(g_video);
@@ -151,8 +163,11 @@ static void release_working_set(void)
     g_index = NULL;
     g_video_size = 0;
     g_frame_count = 0;
-    g_capacity_pixels = 0;
-    g_min_div = 1;
+    g_decode_capacity_pixels = 0;
+    g_index_capacity_pixels = 0;
+    g_target_w = 0;
+    g_target_h = 0;
+    g_decode_div = 1;
 }
 
 esp_err_t prisma_video_process_prepare(void)
@@ -215,35 +230,31 @@ esp_err_t prisma_video_process_prepare(void)
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    uint8_t div = choose_scale(src_w, src_h);
+    prisma_poster_config_t pcfg;
+    (void)prisma_poster_config_load(&pcfg);
+    uint16_t target_w = pcfg.video_width;
+    uint16_t target_h = pcfg.video_height;
+
+    size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t budget = free_psram > VIDEO_PSRAM_RESERVE ? free_psram - VIDEO_PSRAM_RESERVE : 0;
+    uint8_t div = choose_decode_div(src_w, src_h, target_w, target_h, budget);
     if (!div) {
         free(video);
-        set_error("VIDEO resolution exceeds adaptive PSRAM budget");
+        set_error("configured VIDEO output exceeds safe PSRAM budget");
         return ESP_ERR_NO_MEM;
     }
 
-    uint16_t out_w = src_w / div;
-    uint16_t out_h = src_h / div;
-    size_t pixels = (size_t)out_w * out_h;
-    uint16_t *decode = psram_alloc(pixels * sizeof(uint16_t));
-    uint8_t *index = psram_alloc(pixels);
-    while ((!decode || !index) && div < 8) {
-        free(decode);
-        free(index);
-        decode = NULL;
-        index = NULL;
-        div *= 2;
-        out_w = src_w / div;
-        out_h = src_h / div;
-        pixels = (size_t)out_w * out_h;
-        decode = psram_alloc(pixels * sizeof(uint16_t));
-        index = psram_alloc(pixels);
-    }
+    uint16_t decode_w = src_w / div;
+    uint16_t decode_h = src_h / div;
+    size_t decode_pixels = (size_t)decode_w * decode_h;
+    size_t output_pixels = (size_t)target_w * target_h;
+    uint16_t *decode = psram_alloc(decode_pixels * sizeof(uint16_t));
+    uint8_t *index = psram_alloc(output_pixels);
     if (!decode || !index) {
         free(video);
         free(decode);
         free(index);
-        set_error("not enough PSRAM for adaptive VIDEO buffers");
+        set_error("not enough PSRAM for configured VIDEO buffers");
         return ESP_ERR_NO_MEM;
     }
 
@@ -254,8 +265,11 @@ esp_err_t prisma_video_process_prepare(void)
     g_frame_count = count;
     g_decode = decode;
     g_index = index;
-    g_capacity_pixels = pixels;
-    g_min_div = div;
+    g_decode_capacity_pixels = decode_pixels;
+    g_index_capacity_pixels = output_pixels;
+    g_target_w = target_w;
+    g_target_h = target_h;
+    g_decode_div = div;
     memset(&g_status, 0, sizeof(g_status));
     g_status.ready = true;
     g_status.prepared = true;
@@ -264,12 +278,12 @@ esp_err_t prisma_video_process_prepare(void)
     g_status.frame_count = count;
     g_status.source_width = src_w;
     g_status.source_height = src_h;
-    g_status.width = out_w;
-    g_status.height = out_h;
+    g_status.width = target_w;
+    g_status.height = target_h;
     g_status.min_scale_div = div;
     g_status.scale_div = div;
-    g_status.pixel_bytes = pixels;
-    g_status.transport_bytes = pixels + 4;
+    g_status.pixel_bytes = output_pixels;
+    g_status.transport_bytes = output_pixels + 4;
     g_status.free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     xSemaphoreGive(g_lock);
     return ESP_OK;
@@ -277,16 +291,17 @@ esp_err_t prisma_video_process_prepare(void)
 
 esp_err_t prisma_video_process_render_frame(uint16_t index, uint8_t requested_div)
 {
+    (void)requested_div;
     if (!g_lock && prisma_video_process_init() != ESP_OK) return ESP_ERR_NO_MEM;
+
     xSemaphoreTake(g_lock, portMAX_DELAY);
     bool prepared = g_status.prepared && g_video && g_decode && g_index && index < g_frame_count;
     frame_ref_t ref = prepared ? g_frames[index] : (frame_ref_t){0};
-    uint8_t min_div = g_min_div;
+    uint8_t div = g_decode_div;
+    uint16_t target_w = g_target_w;
+    uint16_t target_h = g_target_h;
     xSemaphoreGive(g_lock);
     if (!prepared) return ESP_ERR_INVALID_ARG;
-
-    uint8_t div = valid_div(requested_div) ? requested_div : min_div;
-    if (div < min_div) div = min_div;
 
     int64_t started = esp_timer_get_time();
     const uint8_t *jpeg = g_video + ref.offset;
@@ -296,17 +311,11 @@ esp_err_t prisma_video_process_render_frame(uint16_t index, uint8_t requested_di
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    size_t requested_pixels = (size_t)(src_w / div) * (src_h / div);
-    if (!requested_pixels || requested_pixels > g_capacity_pixels) {
-        set_error("requested adaptive VIDEO scale exceeds prepared buffer");
-        return ESP_ERR_NO_MEM;
-    }
-
     esp_jpeg_image_cfg_t cfg = {
         .indata = jpeg,
         .indata_size = ref.length,
         .outbuf = (uint8_t *)g_decode,
-        .outbuf_size = g_capacity_pixels * sizeof(uint16_t),
+        .outbuf_size = g_decode_capacity_pixels * sizeof(uint16_t),
         .out_format = JPEG_IMAGE_FORMAT_RGB565,
         .out_scale = scale_enum(div),
         .flags = { .swap_color_bytes = 0 },
@@ -318,24 +327,37 @@ esp_err_t prisma_video_process_render_frame(uint16_t index, uint8_t requested_di
         return err;
     }
 
-    size_t n = (size_t)decoded.width * decoded.height;
-    if (n > g_capacity_pixels) {
-        set_error("decoded VIDEO frame exceeded prepared buffer");
+    size_t decoded_pixels = (size_t)decoded.width * decoded.height;
+    size_t output_pixels = (size_t)target_w * target_h;
+    if (decoded_pixels > g_decode_capacity_pixels || output_pixels > g_index_capacity_pixels) {
+        set_error("VIDEO frame exceeded prepared buffers");
         return ESP_ERR_NO_MEM;
     }
-    for (size_t i = 0; i < n; ++i) g_index[i] = poster_index(g_decode[i]);
+
+    for (uint16_t y = 0; y < target_h; ++y) {
+        uint16_t sy = (uint16_t)(((uint32_t)y * decoded.height) / target_h);
+        if (sy >= decoded.height) sy = decoded.height - 1;
+        for (uint16_t x = 0; x < target_w; ++x) {
+            uint16_t sx = (uint16_t)(((uint32_t)x * decoded.width) / target_w);
+            if (sx >= decoded.width) sx = decoded.width - 1;
+            g_index[(size_t)y * target_w + x] =
+                poster_index(g_decode[(size_t)sy * decoded.width + sx]);
+        }
+    }
 
     uint32_t elapsed = (uint32_t)((esp_timer_get_time() - started) / 1000);
     xSemaphoreTake(g_lock, portMAX_DELAY);
     g_status.valid = true;
     g_status.error[0] = '\0';
     g_status.last_frame = index;
-    g_status.width = decoded.width;
-    g_status.height = decoded.height;
+    g_status.source_width = src_w;
+    g_status.source_height = src_h;
+    g_status.width = target_w;
+    g_status.height = target_h;
     g_status.scale_div = div;
     g_status.last_frame_ms = elapsed;
-    g_status.pixel_bytes = n;
-    g_status.transport_bytes = n + 4;
+    g_status.pixel_bytes = output_pixels;
+    g_status.transport_bytes = output_pixels + 4;
     g_status.free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     xSemaphoreGive(g_lock);
     return ESP_OK;
