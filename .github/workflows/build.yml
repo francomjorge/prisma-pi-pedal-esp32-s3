@@ -1,0 +1,37 @@
+name: CORE-1 build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 core and factory
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build && python3 tools/make_factory.py --build build
+
+      - name: Verify 16 MB factory
+        run: |
+          test "$(stat -c%s build/PRISMA-PI-PEDAL-factory-16MB.bin)" -eq 16777216
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core1
+          if-no-files-found: error
+          path: |
+            build/PRISMA-PI-PEDAL-factory-16MB.bin
+            build/prisma_pi_pedal_core.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
