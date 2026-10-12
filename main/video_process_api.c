@@ -11,6 +11,7 @@
 #include "esp_log.h"
 
 static const char *TAG = "PRISMA_VIDEO_API";
+static const char *BASE = "/api/v1/process/test/video/";
 
 static bool auth(httpd_req_t *r){ return prisma_admin_authorize(r); }
 
@@ -43,10 +44,8 @@ static esp_err_t send_status(httpd_req_t *r)
     return err;
 }
 
-static esp_err_t prepare_post(httpd_req_t *r)
+static esp_err_t prepare_get(httpd_req_t *r)
 {
-    if(!auth(r)) return ESP_OK;
-    /* Lazy by design: VIDEO processing allocates/initializes only when requested. */
     esp_err_t err=prisma_video_process_prepare();
     if(err!=ESP_OK){
         prisma_video_process_status_t s={0}; prisma_video_process_get_status(&s);
@@ -58,16 +57,8 @@ static esp_err_t prepare_post(httpd_req_t *r)
     return send_status(r);
 }
 
-static esp_err_t status_get(httpd_req_t *r)
-{
-    if(!auth(r)) return ESP_OK;
-    /* Status may initialize only its tiny mutex/status structure on first request. */
-    return send_status(r);
-}
-
 static esp_err_t frame_get(httpd_req_t *r)
 {
-    if(!auth(r)) return ESP_OK;
     char query[64]={0}, val[16]={0};
     if(httpd_req_get_url_query_str(r,query,sizeof(query))!=ESP_OK ||
        httpd_query_key_value(query,"i",val,sizeof(val))!=ESP_OK){
@@ -87,17 +78,26 @@ static esp_err_t frame_get(httpd_req_t *r)
     return prisma_video_process_send_bmp(r);
 }
 
-static void reg(httpd_handle_t s,const httpd_uri_t *u){
-    esp_err_t e=httpd_register_uri_handler(s,u);
-    if(e!=ESP_OK) ESP_LOGE(TAG,"route %s failed: %s",u->uri,esp_err_to_name(e));
+static esp_err_t video_dispatch_get(httpd_req_t *r)
+{
+    if(!auth(r)) return ESP_OK;
+    if(strncmp(r->uri, "/api/v1/process/test/video/prepare", 34)==0) return prepare_get(r);
+    if(strncmp(r->uri, "/api/v1/process/test/video/status", 33)==0) return send_status(r);
+    if(strncmp(r->uri, "/api/v1/process/test/video/frame.bmp", 36)==0) return frame_get(r);
+    httpd_resp_set_status(r,"404 Not Found");
+    return httpd_resp_sendstr(r,"unknown video test endpoint");
 }
 
 void prisma_video_process_register_routes(httpd_handle_t server)
 {
-    /* IMPORTANT: no prisma_video_process_init() here. Keep boot/AP path unchanged. */
-    static const httpd_uri_t prep={.uri="/api/v1/process/test/video/prepare",.method=HTTP_POST,.handler=prepare_post};
-    static const httpd_uri_t stat={.uri="/api/v1/process/test/video/status",.method=HTTP_GET,.handler=status_get};
-    static const httpd_uri_t frame={.uri="/api/v1/process/test/video/frame.bmp",.method=HTTP_GET,.handler=frame_get};
-    reg(server,&prep); reg(server,&stat); reg(server,&frame);
-    ESP_LOGI(TAG,"CORE-4C VIDEO routes registered lazy");
+    /* One wildcard handler keeps total HTTP routes at the validated CORE-4B capacity.
+       Video processing itself remains fully lazy until PREPARE is requested. */
+    static const httpd_uri_t video={
+        .uri="/api/v1/process/test/video/*",
+        .method=HTTP_GET,
+        .handler=video_dispatch_get
+    };
+    esp_err_t e=httpd_register_uri_handler(server,&video);
+    if(e!=ESP_OK) ESP_LOGE(TAG,"video wildcard route failed: %s",esp_err_to_name(e));
+    else ESP_LOGI(TAG,"CORE-4C VIDEO wildcard route ready (lazy)");
 }
