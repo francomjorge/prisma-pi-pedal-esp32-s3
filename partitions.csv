@@ -1,6 +1,9 @@
-# CORE-1A: single factory app; keep the proven app offset and existing SPIFFS API.
+# CORE-1B: proven single-app layout + first robust IMAGE A/B raw slots.
+# Legacy SPIFFS remains present so the validated UI/web path is unchanged.
 # Name,   Type, SubType, Offset,    Size,      Flags
 nvs,      data, nvs,     0x009000,  0x006000,
 phy_init, data, phy,     0x00F000,  0x001000,
 factory,  app,  factory, 0x020000,  0x600000,
-storage,  data, spiffs,  0x620000,  0x9E0000,
+image_a,  data, 0x40,    0x620000,  0x100000,
+image_b,  data, 0x41,    0x720000,  0x100000,
+storage,  data, spiffs,  0x820000,  0x7E0000,
