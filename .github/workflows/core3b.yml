@@ -1,0 +1,59 @@
+name: CORE-3B admin storage test
+
+on:
+  push:
+    branches: [core3b-admin-storage]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify CORE-3B admin contract
+        run: |
+          grep -q 'PRISMA_ADMIN_USERNAME "Prisma-P"' main/admin_auth.h
+          grep -q 'PRISMA_ADMIN_PASSWORD "Prisma-P"' main/admin_auth.h
+          grep -q 'Basic UHJpc21hLVA6UHJpc21hLVA=' main/admin_auth.c
+          grep -q '"/admin"' main/admin_api.c
+          grep -q '"/api/v1/admin/storage"' main/admin_api.c
+          grep -q '"/api/v1/wifi/connect"' main/admin_api.c
+          grep -q '"/api/v1/image"' main/admin_api.c
+          grep -q '"/api/v1/video"' main/admin_api.c
+          grep -q 'UPLOAD / REPLACE' main/web/admin.html
+          grep -q 'LEGACY STORAGE / SPIFFS' main/web/admin.html
+          grep -q '.wifiBtn,.wifiShade{display:none!important}' main/web/style.css
+          grep -q 'prisma_admin_authorize' main/api_core3a.c
+          grep -q 'prisma_admin_register_routes' main/api_core3a.c
+          grep -q -- '--wrap=httpd_start' main/CMakeLists.txt
+          grep -q 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -q 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core3b_factory.py
+          test "$(stat -c%s dist/PRISMA-PI-PEDAL-CORE3B-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-PEDAL-CORE3B-16MB.bin > dist/PRISMA-PI-PEDAL-CORE3B-16MB.sha256
+
+      - name: Upload CORE-3B
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core3b
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-PEDAL-CORE3B-16MB.bin
+            dist/PRISMA-PI-PEDAL-CORE3B-16MB.sha256
+            build/prisma_pi_pedal_core3b.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/storage.bin
