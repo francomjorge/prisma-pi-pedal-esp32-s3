@@ -50,9 +50,21 @@ static void current_ip(char *out, size_t out_size)
     strlcpy(out, "0.0.0.0", out_size);
 }
 
+static void wait_for_network_stack(void)
+{
+    while (1) {
+        esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+        if (sta || ap) return;
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+}
+
 static void udp_discovery_task(void *arg)
 {
     (void)arg;
+
+    wait_for_network_stack();
 
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     if (sock < 0) {
@@ -105,8 +117,8 @@ static void udp_discovery_task(void *arg)
 
         char reply[256];
         int n = snprintf(reply, sizeof(reply),
-            "{\"protocol\":\"PRISMA_DISCOVERY_V1\",\"device_id\":\"%s\",\"type\":\"pedal\",\"api\":\"v1\",\"ip\":\"%s\",\"hostname\":\"%s.local\",\"http_port\":80}",
-            device_id, ip, hostname);
+            "{\"protocol\":\"PRISMA_DISCOVERY_V1\",\"device_id\":\"%s\",\"type\":\"pedal\",\"api\":\"v1\",\"ip\":\"%s\",\"hostname\":\"%s.local\",\"http_port\":80,\"udp_port\":%d}",
+            device_id, ip, hostname, PRISMA_DISCOVERY_PORT);
         if (n <= 0 || n >= (int)sizeof(reply)) continue;
 
         int sent = sendto(sock, reply, n, 0,
