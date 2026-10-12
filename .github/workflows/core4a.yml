@@ -22,6 +22,11 @@ jobs:
 
       - name: Verify CORE-4A contract
         run: |
+          grep -q '^CONFIG_SPIRAM=y$' sdkconfig
+          grep -q '^CONFIG_SPIRAM_MODE_OCT=y$' sdkconfig
+          grep -q '^CONFIG_SPIRAM_SPEED_80M=y$' sdkconfig
+          grep -q '^CONFIG_SPIRAM_BOOT_INIT=y$' sdkconfig
+          grep -q '^CONFIG_SPIRAM_USE_MALLOC=y$' sdkconfig
           grep -q 'espressif/esp_jpeg' main/idf_component.yml
           grep -q 'prisma_process_run_poster' main/local_process.c
           grep -q 'prisma_image_ab_read' main/local_process.c
