@@ -12,8 +12,8 @@
 #include "jpeg_decoder.h"
 
 #include "image_ab.h"
+#include "poster_config.h"
 
-#define PROCESS_TARGET_LONG_SIDE 800u
 #define PROCESS_PSRAM_RESERVE (2u * 1024u * 1024u)
 #define TEST_W 240
 #define TEST_H 240
@@ -38,6 +38,8 @@ static void status_error(const char *test, const char *message)
     xSemaphoreTake(g_lock, portMAX_DELAY);
     g_status.busy = false;
     g_status.valid = false;
+    g_status.source_width = 0;
+    g_status.source_height = 0;
     g_status.width = 0;
     g_status.height = 0;
     g_status.pixel_bytes = 0;
@@ -62,7 +64,9 @@ static bool begin_test(const char *name)
     return true;
 }
 
-static void commit_result(const char *name, uint16_t *pixels, uint16_t width, uint16_t height,
+static void commit_result(const char *name, uint16_t *pixels,
+                          uint16_t source_width, uint16_t source_height,
+                          uint16_t width, uint16_t height,
                           uint32_t elapsed_ms, uint32_t source_generation, uint8_t scale_div)
 {
     xSemaphoreTake(g_lock, portMAX_DELAY);
@@ -73,6 +77,8 @@ static void commit_result(const char *name, uint16_t *pixels, uint16_t width, ui
     g_status.ready = true;
     g_status.valid = true;
     strlcpy(g_status.last_test, name, sizeof(g_status.last_test));
+    g_status.source_width = source_width;
+    g_status.source_height = source_height;
     g_status.width = width;
     g_status.height = height;
     g_status.elapsed_ms = elapsed_ms;
@@ -93,22 +99,6 @@ esp_err_t prisma_process_init(void)
     g_status.ready = true;
     g_status.free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     return ESP_OK;
-}
-
-static uint8_t choose_scale_div(uint16_t width, uint16_t height)
-{
-    const uint8_t divs[] = {1, 2, 4, 8};
-    size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    size_t budget = free_psram > PROCESS_PSRAM_RESERVE ? free_psram - PROCESS_PSRAM_RESERVE : 0;
-    for (size_t i = 0; i < sizeof(divs); ++i) {
-        uint8_t div = divs[i];
-        uint32_t w = width / div;
-        uint32_t h = height / div;
-        size_t bytes = (size_t)w * h * sizeof(uint16_t);
-        uint32_t long_side = w > h ? w : h;
-        if (w && h && long_side <= PROCESS_TARGET_LONG_SIDE && bytes <= budget) return div;
-    }
-    return 0;
 }
 
 static esp_jpeg_image_scale_t scale_enum(uint8_t div)
@@ -180,15 +170,39 @@ static inline uint8_t poster_index(uint16_t c)
     return (uint8_t)((rl << 4) | (gl << 2) | bl);
 }
 
+static uint8_t choose_manual_decode_div(uint16_t src_w, uint16_t src_h,
+                                        uint16_t target_w, uint16_t target_h,
+                                        size_t budget)
+{
+    const uint8_t divs[] = {8, 4, 2, 1};
+    uint16_t need_w = target_w < src_w ? target_w : src_w;
+    uint16_t need_h = target_h < src_h ? target_h : src_h;
+    size_t final_bytes = (size_t)target_w * target_h * sizeof(uint16_t);
+
+    for (size_t i = 0; i < sizeof(divs); ++i) {
+        uint8_t div = divs[i];
+        uint16_t w = src_w / div;
+        uint16_t h = src_h / div;
+        if (!w || !h || w < need_w || h < need_h) continue;
+        size_t working = (size_t)w * h * sizeof(uint16_t) + final_bytes;
+        if (working <= budget) return div;
+    }
+    return 0;
+}
+
 esp_err_t prisma_process_run_poster(void)
 {
     if (!begin_test("poster")) return ESP_ERR_INVALID_STATE;
     int64_t started = esp_timer_get_time();
+
     prisma_image_info_t info = {0};
     if (prisma_image_ab_get_info(&info) != ESP_OK || !info.valid || info.size == 0) {
         status_error("poster", "no active IMAGE in A/B storage");
         return ESP_ERR_NOT_FOUND;
     }
+
+    prisma_poster_config_t pcfg;
+    (void)prisma_poster_config_load(&pcfg);
 
     uint8_t *jpeg = psram_alloc(info.size);
     if (!jpeg) {
@@ -209,28 +223,45 @@ esp_err_t prisma_process_run_poster(void)
         return ESP_ERR_NOT_SUPPORTED;
     }
 
-    uint8_t div = choose_scale_div(src_w, src_h);
-    if (!div) {
-        free(jpeg);
-        status_error("poster", "decoded IMAGE exceeds adaptive PSRAM budget");
-        return ESP_ERR_NO_MEM;
+    size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t budget = free_psram > PROCESS_PSRAM_RESERVE ? free_psram - PROCESS_PSRAM_RESERVE : 0;
+
+    bool source_mode = pcfg.image_mode == PRISMA_POSTER_IMAGE_SOURCE;
+    uint16_t target_w = source_mode ? src_w : pcfg.image_width;
+    uint16_t target_h = source_mode ? src_h : pcfg.image_height;
+    uint8_t div = 1;
+
+    if (source_mode) {
+        size_t decode_bytes = (size_t)src_w * src_h * sizeof(uint16_t);
+        if (decode_bytes > budget) {
+            free(jpeg);
+            status_error("poster", "SOURCE output exceeds safe PSRAM budget; choose MANUAL output");
+            return ESP_ERR_NO_MEM;
+        }
+    } else {
+        div = choose_manual_decode_div(src_w, src_h, target_w, target_h, budget);
+        if (!div) {
+            free(jpeg);
+            status_error("poster", "configured IMAGE output exceeds safe PSRAM budget");
+            return ESP_ERR_NO_MEM;
+        }
     }
 
-    uint16_t out_w = src_w / div;
-    uint16_t out_h = src_h / div;
-    size_t out_bytes = (size_t)out_w * out_h * sizeof(uint16_t);
-    uint16_t *pixels = psram_alloc(out_bytes);
-    if (!pixels) {
+    uint16_t decode_w = src_w / div;
+    uint16_t decode_h = src_h / div;
+    size_t decode_bytes = (size_t)decode_w * decode_h * sizeof(uint16_t);
+    uint16_t *decode = psram_alloc(decode_bytes);
+    if (!decode) {
         free(jpeg);
-        status_error("poster", "not enough RAM/PSRAM for decoded IMAGE");
+        status_error("poster", "not enough PSRAM for IMAGE decode buffer");
         return ESP_ERR_NO_MEM;
     }
 
     esp_jpeg_image_cfg_t cfg = {
         .indata = jpeg,
         .indata_size = info.size,
-        .outbuf = (uint8_t *)pixels,
-        .outbuf_size = out_bytes,
+        .outbuf = (uint8_t *)decode,
+        .outbuf_size = decode_bytes,
         .out_format = JPEG_IMAGE_FORMAT_RGB565,
         .out_scale = scale_enum(div),
         .flags = {.swap_color_bytes = 0},
@@ -239,17 +270,43 @@ esp_err_t prisma_process_run_poster(void)
     err = esp_jpeg_decode(&cfg, &decoded);
     free(jpeg);
     if (err != ESP_OK) {
-        free(pixels);
+        free(decode);
         status_error("poster", "ESP JPEG decoder failed");
         return err;
     }
 
-    size_t count = (size_t)decoded.width * decoded.height;
-    for (size_t i = 0; i < count; ++i) pixels[i] = posterize_rgb565(pixels[i]);
+    uint16_t *result = decode;
+    if (source_mode || (decoded.width == target_w && decoded.height == target_h)) {
+        size_t count = (size_t)decoded.width * decoded.height;
+        for (size_t i = 0; i < count; ++i) decode[i] = posterize_rgb565(decode[i]);
+        target_w = decoded.width;
+        target_h = decoded.height;
+    } else {
+        size_t final_bytes = (size_t)target_w * target_h * sizeof(uint16_t);
+        result = psram_alloc(final_bytes);
+        if (!result) {
+            free(decode);
+            status_error("poster", "not enough PSRAM for configured IMAGE output");
+            return ESP_ERR_NO_MEM;
+        }
+        for (uint16_t y = 0; y < target_h; ++y) {
+            uint16_t sy = (uint16_t)(((uint32_t)y * decoded.height) / target_h);
+            if (sy >= decoded.height) sy = decoded.height - 1;
+            for (uint16_t x = 0; x < target_w; ++x) {
+                uint16_t sx = (uint16_t)(((uint32_t)x * decoded.width) / target_w);
+                if (sx >= decoded.width) sx = decoded.width - 1;
+                result[(size_t)y * target_w + x] =
+                    posterize_rgb565(decode[(size_t)sy * decoded.width + sx]);
+            }
+        }
+        free(decode);
+    }
+
     uint32_t elapsed = (uint32_t)((esp_timer_get_time() - started) / 1000);
-    commit_result("poster", pixels, decoded.width, decoded.height, elapsed, info.generation, div);
-    ESP_LOGI(TAG, "POSTER adaptive source_gen=%lu %ux%u div=%u %lums",
-             (unsigned long)info.generation, decoded.width, decoded.height, div, (unsigned long)elapsed);
+    commit_result("poster", result, src_w, src_h, target_w, target_h,
+                  elapsed, info.generation, div);
+    ESP_LOGI(TAG, "POSTER source=%ux%u output=%ux%u div=%u %lums",
+             src_w, src_h, target_w, target_h, div, (unsigned long)elapsed);
     return ESP_OK;
 }
 
@@ -313,7 +370,7 @@ static void draw_circle(uint16_t *px, int cx, int cy, int r, uint16_t c)
 static void finish_generated(const char *name, uint16_t *pixels, int64_t started)
 {
     uint32_t elapsed = (uint32_t)((esp_timer_get_time() - started) / 1000);
-    commit_result(name, pixels, TEST_W, TEST_H, elapsed, 0, 1);
+    commit_result(name, pixels, 0, 0, TEST_W, TEST_H, elapsed, 0, 1);
     ESP_LOGI(TAG, "%s local %dx%d %lums", name, TEST_W, TEST_H, (unsigned long)elapsed);
 }
 
