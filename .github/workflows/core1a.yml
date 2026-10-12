@@ -1,0 +1,40 @@
+name: CORE-1A partition test
+
+on:
+  push:
+    branches: [core1a-partitions]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core1a_factory.py
+          test "$(stat -c%s build/PRISMA-PI-PEDAL-CORE1A-16MB.bin)" -eq 16777216
+          sha256sum build/PRISMA-PI-PEDAL-CORE1A-16MB.bin > build/PRISMA-PI-PEDAL-CORE1A-16MB.sha256
+
+      - name: Upload CORE-1A
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core1a
+          if-no-files-found: error
+          path: |
+            build/PRISMA-PI-PEDAL-CORE1A-16MB.bin
+            build/PRISMA-PI-PEDAL-CORE1A-16MB.sha256
+            build/prisma_pi_pedal_core1a.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/storage.bin
