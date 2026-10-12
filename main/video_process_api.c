@@ -46,6 +46,7 @@ static esp_err_t send_status(httpd_req_t *r)
 static esp_err_t prepare_post(httpd_req_t *r)
 {
     if(!auth(r)) return ESP_OK;
+    /* Lazy by design: VIDEO processing allocates/initializes only when requested. */
     esp_err_t err=prisma_video_process_prepare();
     if(err!=ESP_OK){
         prisma_video_process_status_t s={0}; prisma_video_process_get_status(&s);
@@ -60,6 +61,7 @@ static esp_err_t prepare_post(httpd_req_t *r)
 static esp_err_t status_get(httpd_req_t *r)
 {
     if(!auth(r)) return ESP_OK;
+    /* Status may initialize only its tiny mutex/status structure on first request. */
     return send_status(r);
 }
 
@@ -92,10 +94,10 @@ static void reg(httpd_handle_t s,const httpd_uri_t *u){
 
 void prisma_video_process_register_routes(httpd_handle_t server)
 {
-    prisma_video_process_init();
+    /* IMPORTANT: no prisma_video_process_init() here. Keep boot/AP path unchanged. */
     static const httpd_uri_t prep={.uri="/api/v1/process/test/video/prepare",.method=HTTP_POST,.handler=prepare_post};
     static const httpd_uri_t stat={.uri="/api/v1/process/test/video/status",.method=HTTP_GET,.handler=status_get};
     static const httpd_uri_t frame={.uri="/api/v1/process/test/video/frame.bmp",.method=HTTP_GET,.handler=frame_get};
     reg(server,&prep); reg(server,&stat); reg(server,&frame);
-    ESP_LOGI(TAG,"CORE-4C VIDEO processing routes ready");
+    ESP_LOGI(TAG,"CORE-4C VIDEO routes registered lazy");
 }
