@@ -1,0 +1,55 @@
+name: CORE-2A Wi-Fi provisioning test
+
+on:
+  push:
+    branches: [core2a-wifi-provisioning]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify CORE-2A network contract
+        run: |
+          grep -q '"/api/v1/wifi/status"' main/wifi_portal.c
+          grep -q '"/api/v1/wifi/scan"' main/wifi_portal.c
+          grep -q '"/api/v1/wifi/connect"' main/wifi_portal.c
+          grep -q '"/api/v1/wifi/reset"' main/wifi_portal.c
+          grep -q 'WIFI_MODE_STA' main/wifi_portal.c
+          grep -q 'WIFI_MODE_APSTA' main/wifi_portal.c
+          grep -q 'prisma_net' main/wifi_portal.c
+          grep -q 'WIFI_MAX_RETRY' main/wifi_portal.c
+          grep -q 'PRP-%02X%02X%02X' main/wifi_portal.c
+          grep -q 'PRISMA-PI-%02X%02X' main/wifi_portal.c
+          grep -q 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -q 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core2a_factory.py
+          test "$(stat -c%s dist/PRISMA-PI-PEDAL-CORE2A-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-PEDAL-CORE2A-16MB.bin > dist/PRISMA-PI-PEDAL-CORE2A-16MB.sha256
+
+      - name: Upload CORE-2A
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core2a
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-PEDAL-CORE2A-16MB.bin
+            dist/PRISMA-PI-PEDAL-CORE2A-16MB.sha256
+            build/prisma_pi_pedal_core2a.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/storage.bin
