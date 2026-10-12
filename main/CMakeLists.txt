@@ -6,5 +6,10 @@ idf_component_register(
         "prisma_power.c"
         "prisma_storage.c"
     INCLUDE_DIRS "."
-    REQUIRES driver esp_lcd esp_partition
+    REQUIRES
+        esp_driver_gpio
+        esp_driver_spi
+        esp_driver_i2c
+        esp_lcd
+        esp_partition
 )

@@ -5,7 +5,7 @@
 
 #define PRISMA_MEDIA_MAGIC 0x504D4544u
 #define PRISMA_MEDIA_VERSION 1u
-#define IO_CHUNK 4096u
+#define IO_CHUNK 1024u
 
 typedef struct __attribute__((packed)) {
     uint32_t magic;

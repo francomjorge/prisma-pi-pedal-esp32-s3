@@ -51,9 +51,9 @@ static void show(void)
 
 bool prisma_display_init(void)
 {
-    s_frame = heap_caps_malloc(LCD_W * LCD_H * sizeof(uint16_t), MALLOC_CAP_8BIT);
+    s_frame = heap_caps_malloc(LCD_W * LCD_H * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!s_frame) {
-        ESP_LOGE(TAG, "frame allocation failed");
+        ESP_LOGE(TAG, "DMA frame allocation failed");
         return false;
     }
 
