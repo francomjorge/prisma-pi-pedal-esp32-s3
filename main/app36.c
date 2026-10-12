@@ -1,11 +1,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 #include "esp_log.h"
 #include "storage.h"
 #include "image_ab.h"
 #include "video_ab.h"
 #include "discovery.h"
 #include "discovery_udp.h"
+
+#define BAT_POWER_PIN 2
 
 #define synth_on prisma_shared_on
 #define mode_index prisma_shared_mode
@@ -24,6 +27,18 @@
 
 static const char *SYNC_TAG = "WEB_SYNC";
 
+static void prisma_early_power_hold(void)
+{
+    /* CORE-3C can verify up to 4 MB of media before legacy_main starts.
+       Assert the exact known-good battery hold pin before any flash scan. */
+    gpio_config_t p = {
+        .pin_bit_mask = 1ULL << BAT_POWER_PIN,
+        .mode = GPIO_MODE_OUTPUT,
+    };
+    ESP_ERROR_CHECK(gpio_config(&p));
+    ESP_ERROR_CHECK(gpio_set_level(BAT_POWER_PIN, 1));
+}
+
 bool prisma_appliance_get_on(void){return prisma_shared_on;}
 int prisma_appliance_get_mode(void){return prisma_shared_mode ? 1 : 0;}
 int prisma_appliance_get_intensity(void){return prisma_shared_intensity;}
@@ -33,6 +48,8 @@ int prisma_appliance_get_effect_value(int effect){if(effect<0||effect>=EFFECT_CO
 
 void app_main(void)
 {
+    prisma_early_power_hold();
+
     prisma_shared_mode = 0;
     prisma_shared_intensity = 61;
     prisma_storage_init();
@@ -45,6 +62,6 @@ void app_main(void)
 
     prisma_discovery_start_task();
     prisma_udp_discovery_start_task();
-    ESP_LOGI(SYNC_TAG, "CORE-2 discovery armed: mDNS + UDP fallback");
+    ESP_LOGI(SYNC_TAG, "CORE-3C storage validation + discovery armed");
     prisma_legacy_main();
 }
