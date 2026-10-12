@@ -16,8 +16,22 @@ typedef struct {
     uint32_t crc32;
 } prisma_video_info_t;
 
+typedef struct {
+    bool ready;
+    bool valid;
+    char active_bank;
+    char inactive_bank;
+    uint32_t generation;
+    size_t size;
+    uint32_t expected_crc32;
+    uint32_t actual_crc32;
+    bool crc_match;
+    bool recovered_on_boot;
+} prisma_video_verify_t;
+
 esp_err_t prisma_video_ab_init(void);
 esp_err_t prisma_video_ab_get_info(prisma_video_info_t *out);
+esp_err_t prisma_video_ab_verify(prisma_video_verify_t *out);
 esp_err_t prisma_video_ab_begin(size_t expected_size);
 esp_err_t prisma_video_ab_write(size_t offset, const void *data, size_t len);
 esp_err_t prisma_video_ab_finalize(void);
