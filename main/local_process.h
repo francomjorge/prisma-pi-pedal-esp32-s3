@@ -25,5 +25,8 @@ typedef struct {
 esp_err_t prisma_process_init(void);
 esp_err_t prisma_process_run_poster(void);
 esp_err_t prisma_process_run_lines(void);
+esp_err_t prisma_process_run_rectangles(void);
+esp_err_t prisma_process_run_circles(void);
+esp_err_t prisma_process_run_triangles(void);
 esp_err_t prisma_process_get_status(prisma_process_status_t *out);
 esp_err_t prisma_process_send_bmp(httpd_req_t *req);
