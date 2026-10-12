@@ -58,10 +58,11 @@ static void discovery_task(void *arg)
     mdns_txt_item_t prisma_txt[] = {
         {"id", device_id},
         {"type", "pedal"},
-        {"api", "v1"}
+        {"api", "v1"},
+        {"udp", "4210"}
     };
 
-    err = mdns_service_add(NULL, "_prisma", "_tcp", 80, prisma_txt, 3);
+    err = mdns_service_add(NULL, "_prisma", "_tcp", 80, prisma_txt, 4);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "_prisma service failed: %s", esp_err_to_name(err));
         mdns_free();
@@ -74,7 +75,7 @@ static void discovery_task(void *arg)
         ESP_LOGW(TAG, "_http service not published: %s", esp_err_to_name(err));
     }
 
-    ESP_LOGI(TAG, "READY http://%s.local  service=_prisma._tcp id=%s", hostname, device_id);
+    ESP_LOGI(TAG, "READY http://%s.local service=_prisma._tcp id=%s udp=4210", hostname, device_id);
     vTaskDelete(NULL);
 }
 
