@@ -13,6 +13,7 @@
 #define VIDEO_META_VERSION 1u
 #define VIDEO_BANK_A       0u
 #define VIDEO_BANK_B       1u
+#define VERIFY_CHUNK       1024u
 
 static const char *TAG = "PRISMA_VIDEO_AB";
 
@@ -41,6 +42,7 @@ static const esp_partition_t *g_bank[2] = {NULL, NULL};
 static nvs_handle_t g_nvs = 0;
 static bool g_nvs_open = false;
 static bool g_ready = false;
+static bool g_recovered_on_boot = false;
 static video_meta_t g_meta;
 static int g_meta_slot = -1;
 static video_write_session_t g_write;
@@ -87,6 +89,38 @@ static bool generation_newer(uint32_t a, uint32_t b)
     return (int32_t)(a - b) > 0;
 }
 
+static esp_err_t partition_crc(uint8_t bank, size_t size, uint32_t *out_crc)
+{
+    if (!out_crc || bank > VIDEO_BANK_B || !g_bank[bank]) return ESP_ERR_INVALID_ARG;
+    if (size == 0 || size > g_bank[bank]->size) return ESP_ERR_INVALID_SIZE;
+
+    uint8_t buf[VERIFY_CHUNK];
+    size_t offset = 0;
+    uint32_t state = 0xFFFFFFFFu;
+    while (offset < size) {
+        size_t n = size - offset;
+        if (n > sizeof(buf)) n = sizeof(buf);
+        esp_err_t err = esp_partition_read(g_bank[bank], offset, buf, n);
+        if (err != ESP_OK) return err;
+        state = crc32_update_state(state, buf, n);
+        offset += n;
+    }
+    *out_crc = state ^ 0xFFFFFFFFu;
+    return ESP_OK;
+}
+
+static bool payload_matches(const video_meta_t *m, uint32_t *actual_crc)
+{
+    if (!m || !m->video_valid) {
+        if (actual_crc) *actual_crc = 0;
+        return true;
+    }
+    uint32_t crc = 0;
+    if (partition_crc(m->active_bank, m->size, &crc) != ESP_OK) return false;
+    if (actual_crc) *actual_crc = crc;
+    return crc == m->video_crc32;
+}
+
 static esp_err_t read_meta_slot(int slot, video_meta_t *out)
 {
     if (!g_nvs_open || !out || slot < 0 || slot > 1) return ESP_ERR_INVALID_ARG;
@@ -110,6 +144,7 @@ static esp_err_t commit_meta(const video_meta_t *record)
     if (err != ESP_OK) return err;
     g_meta = *record;
     g_meta_slot = target_slot;
+    g_recovered_on_boot = false;
     return ESP_OK;
 }
 
@@ -127,6 +162,56 @@ static video_meta_t next_meta(bool video_valid, uint8_t bank, uint32_t size, uin
     m.video_crc32 = video_valid ? video_crc : 0u;
     m.meta_crc32 = meta_crc(&m);
     return m;
+}
+
+static void choose_boot_record(bool v0, const video_meta_t *m0, bool v1, const video_meta_t *m1)
+{
+    memset(&g_meta, 0, sizeof(g_meta));
+    g_meta.active_bank = VIDEO_BANK_B;
+    g_meta_slot = -1;
+    g_recovered_on_boot = false;
+
+    if (!v0 && !v1) return;
+
+    if (v0 && v1) {
+        const video_meta_t *newest;
+        const video_meta_t *older;
+        int newest_slot;
+        int older_slot;
+        if (generation_newer(m1->generation, m0->generation)) {
+            newest = m1; newest_slot = 1; older = m0; older_slot = 0;
+        } else {
+            newest = m0; newest_slot = 0; older = m1; older_slot = 1;
+        }
+
+        if (!newest->video_valid || payload_matches(newest, NULL)) {
+            g_meta = *newest;
+            g_meta_slot = newest_slot;
+            return;
+        }
+
+        ESP_LOGE(TAG, "Newest VIDEO payload failed CRC gen=%lu bank=%c; trying rollback",
+                 (unsigned long)newest->generation,
+                 newest->active_bank == VIDEO_BANK_A ? 'A' : 'B');
+        if (!older->video_valid || payload_matches(older, NULL)) {
+            g_meta = *older;
+            g_meta_slot = older_slot;
+            g_recovered_on_boot = true;
+            ESP_LOGW(TAG, "Recovered VIDEO from older committed generation=%lu bank=%c",
+                     (unsigned long)older->generation,
+                     older->active_bank == VIDEO_BANK_A ? 'A' : 'B');
+        }
+        return;
+    }
+
+    const video_meta_t *only = v0 ? m0 : m1;
+    int slot = v0 ? 0 : 1;
+    if (!only->video_valid || payload_matches(only, NULL)) {
+        g_meta = *only;
+        g_meta_slot = slot;
+    } else {
+        ESP_LOGE(TAG, "Only VIDEO metadata record has invalid payload CRC; no active VIDEO");
+    }
 }
 
 esp_err_t prisma_video_ab_init(void)
@@ -171,36 +256,18 @@ esp_err_t prisma_video_ab_init(void)
     video_meta_t m0, m1;
     bool v0 = read_meta_slot(0, &m0) == ESP_OK;
     bool v1 = read_meta_slot(1, &m1) == ESP_OK;
-
-    memset(&g_meta, 0, sizeof(g_meta));
-    g_meta.active_bank = VIDEO_BANK_B; /* First successful upload targets A. */
-    g_meta_slot = -1;
-
-    if (v0 && v1) {
-        if (generation_newer(m1.generation, m0.generation)) {
-            g_meta = m1;
-            g_meta_slot = 1;
-        } else {
-            g_meta = m0;
-            g_meta_slot = 0;
-        }
-    } else if (v0) {
-        g_meta = m0;
-        g_meta_slot = 0;
-    } else if (v1) {
-        g_meta = m1;
-        g_meta_slot = 1;
-    }
+    choose_boot_record(v0, &m0, v1, &m1);
 
     memset(&g_write, 0, sizeof(g_write));
     g_ready = true;
 
     if (g_meta_slot >= 0 && g_meta.video_valid) {
-        ESP_LOGI(TAG, "READY active=%c size=%u crc=%08lx gen=%lu",
+        ESP_LOGI(TAG, "READY active=%c size=%u crc=%08lx gen=%lu recovered=%s",
                  g_meta.active_bank == VIDEO_BANK_A ? 'A' : 'B',
                  (unsigned)g_meta.size,
                  (unsigned long)g_meta.video_crc32,
-                 (unsigned long)g_meta.generation);
+                 (unsigned long)g_meta.generation,
+                 g_recovered_on_boot ? "yes" : "no");
     } else {
         ESP_LOGI(TAG, "READY active=NONE gen=%lu",
                  (unsigned long)(g_meta_slot >= 0 ? g_meta.generation : 0u));
@@ -219,6 +286,32 @@ esp_err_t prisma_video_ab_get_info(prisma_video_info_t *out)
     out->generation = (g_meta_slot >= 0) ? g_meta.generation : 0u;
     out->size = out->valid ? g_meta.size : 0u;
     out->crc32 = out->valid ? g_meta.video_crc32 : 0u;
+    return ESP_OK;
+}
+
+esp_err_t prisma_video_ab_verify(prisma_video_verify_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    memset(out, 0, sizeof(*out));
+    out->ready = g_ready;
+    out->recovered_on_boot = g_recovered_on_boot;
+    if (!g_ready) return ESP_ERR_INVALID_STATE;
+
+    out->valid = (g_meta_slot >= 0 && g_meta.video_valid != 0);
+    if (!out->valid) {
+        out->active_bank = '-';
+        out->inactive_bank = '-';
+        return ESP_OK;
+    }
+
+    out->active_bank = g_meta.active_bank == VIDEO_BANK_A ? 'A' : 'B';
+    out->inactive_bank = g_meta.active_bank == VIDEO_BANK_A ? 'B' : 'A';
+    out->generation = g_meta.generation;
+    out->size = g_meta.size;
+    out->expected_crc32 = g_meta.video_crc32;
+    esp_err_t err = partition_crc(g_meta.active_bank, g_meta.size, &out->actual_crc32);
+    if (err != ESP_OK) return err;
+    out->crc_match = out->actual_crc32 == out->expected_crc32;
     return ESP_OK;
 }
 
@@ -264,16 +357,28 @@ esp_err_t prisma_video_ab_finalize(void)
     if (!g_ready || !g_write.active) return ESP_ERR_INVALID_STATE;
     if (g_write.written != g_write.expected_size) return ESP_ERR_INVALID_SIZE;
 
-    uint32_t video_crc = g_write.crc_state ^ 0xFFFFFFFFu;
-    video_meta_t m = next_meta(true, g_write.bank, (uint32_t)g_write.expected_size, video_crc);
-    esp_err_t err = commit_meta(&m);
+    uint32_t streamed_crc = g_write.crc_state ^ 0xFFFFFFFFu;
+    uint32_t flash_crc = 0;
+    esp_err_t err = partition_crc(g_write.bank, g_write.expected_size, &flash_crc);
+    if (err != ESP_OK || flash_crc != streamed_crc) {
+        ESP_LOGE(TAG, "VIDEO readback verify failed bank=%c streamed=%08lx flash=%08lx err=%s; previous bank remains active",
+                 g_write.bank == VIDEO_BANK_A ? 'A' : 'B',
+                 (unsigned long)streamed_crc,
+                 (unsigned long)flash_crc,
+                 esp_err_to_name(err));
+        memset(&g_write, 0, sizeof(g_write));
+        return err != ESP_OK ? err : ESP_ERR_INVALID_CRC;
+    }
+
+    video_meta_t m = next_meta(true, g_write.bank, (uint32_t)g_write.expected_size, streamed_crc);
+    err = commit_meta(&m);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Metadata commit failed; previous bank remains active: %s", esp_err_to_name(err));
         memset(&g_write, 0, sizeof(g_write));
         return err;
     }
 
-    ESP_LOGI(TAG, "WRITE committed active=%c size=%u crc=%08lx gen=%lu",
+    ESP_LOGI(TAG, "WRITE verified+committed active=%c size=%u crc=%08lx gen=%lu",
              g_meta.active_bank == VIDEO_BANK_A ? 'A' : 'B',
              (unsigned)g_meta.size,
              (unsigned long)g_meta.video_crc32,
