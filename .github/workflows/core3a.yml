@@ -1,0 +1,53 @@
+name: CORE-3A diagnostics API test
+
+on:
+  push:
+    branches: [core3a-diagnostics-api]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify CORE-3A API contract
+        run: |
+          grep -q '"/api/v1/health"' main/api_core3a.c
+          grep -q '"/api/v1/control/status"' main/api_core3a.c
+          grep -q '"/api/v1/admin/status"' main/api_core3a.c
+          grep -q 'admin_auth' main/api_core3a.c
+          grep -q 'PRISMA_DISCOVER_V1' main/api_core3a.c
+          grep -q 'boot_count' main/diagnostics.c
+          grep -q 'minimum_free' main/diagnostics.c
+          grep -q -- '--wrap=httpd_start' main/CMakeLists.txt
+          grep -q 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -q 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core3a_factory.py
+          test "$(stat -c%s dist/PRISMA-PI-PEDAL-CORE3A-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-PEDAL-CORE3A-16MB.bin > dist/PRISMA-PI-PEDAL-CORE3A-16MB.sha256
+
+      - name: Upload CORE-3A
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core3a
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-PEDAL-CORE3A-16MB.bin
+            dist/PRISMA-PI-PEDAL-CORE3A-16MB.sha256
+            build/prisma_pi_pedal_core3a.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/storage.bin
