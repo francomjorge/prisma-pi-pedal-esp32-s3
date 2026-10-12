@@ -23,8 +23,8 @@ jobs:
       - name: Create deterministic 16 MB factory
         run: |
           python3 tools/make_core1a_factory.py
-          test "$(stat -c%s build/PRISMA-PI-PEDAL-CORE1A-16MB.bin)" -eq 16777216
-          sha256sum build/PRISMA-PI-PEDAL-CORE1A-16MB.bin > build/PRISMA-PI-PEDAL-CORE1A-16MB.sha256
+          test "$(stat -c%s dist/PRISMA-PI-PEDAL-CORE1A-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-PEDAL-CORE1A-16MB.bin > dist/PRISMA-PI-PEDAL-CORE1A-16MB.sha256
 
       - name: Upload CORE-1A
         uses: actions/upload-artifact@v4
@@ -32,8 +32,8 @@ jobs:
           name: prisma-pi-pedal-core1a
           if-no-files-found: error
           path: |
-            build/PRISMA-PI-PEDAL-CORE1A-16MB.bin
-            build/PRISMA-PI-PEDAL-CORE1A-16MB.sha256
+            dist/PRISMA-PI-PEDAL-CORE1A-16MB.bin
+            dist/PRISMA-PI-PEDAL-CORE1A-16MB.sha256
             build/prisma_pi_pedal_core1a.bin
             build/bootloader/bootloader.bin
             build/partition_table/partition-table.bin
