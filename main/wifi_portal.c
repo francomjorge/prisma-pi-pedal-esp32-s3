@@ -72,7 +72,8 @@ static esp_err_t image_info_get(httpd_req_t *r)
     prisma_image_info_t info;esp_err_t err=prisma_image_ab_get_info(&info);
     if(err!=ESP_OK){httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"IMAGE A/B unavailable");return err;}
     char b[192];int n=snprintf(b,sizeof(b),"{\"ready\":%s,\"valid\":%s,\"active_bank\":\"%c\",\"generation\":%lu,\"size\":%u,\"crc32\":\"%08lx\"}",info.ready?"true":"false",info.valid?"true":"false",info.active_bank,(unsigned long)info.generation,(unsigned)info.size,(unsigned long)info.crc32);
-    if(n<0||n>=(int)sizeof(b))return ESP_FAIL;httpd_resp_set_type(r,"application/json");no_cache(r);return httpd_resp_send(r,b,n);
+    if(n<0||n>=(int)sizeof(b)){return ESP_FAIL;}
+    httpd_resp_set_type(r,"application/json");no_cache(r);return httpd_resp_send(r,b,n);
 }
 
 static esp_err_t image_put(httpd_req_t *r)
@@ -102,7 +103,8 @@ static esp_err_t video_info_get(httpd_req_t *r)
     prisma_video_info_t info;esp_err_t err=prisma_video_ab_get_info(&info);
     if(err!=ESP_OK){httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"VIDEO A/B unavailable");return err;}
     char b[192];int n=snprintf(b,sizeof(b),"{\"ready\":%s,\"valid\":%s,\"active_bank\":\"%c\",\"generation\":%lu,\"size\":%u,\"crc32\":\"%08lx\"}",info.ready?"true":"false",info.valid?"true":"false",info.active_bank,(unsigned long)info.generation,(unsigned)info.size,(unsigned long)info.crc32);
-    if(n<0||n>=(int)sizeof(b))return ESP_FAIL;httpd_resp_set_type(r,"application/json");no_cache(r);return httpd_resp_send(r,b,n);
+    if(n<0||n>=(int)sizeof(b)){return ESP_FAIL;}
+    httpd_resp_set_type(r,"application/json");no_cache(r);return httpd_resp_send(r,b,n);
 }
 
 static esp_err_t video_put(httpd_req_t *r)
