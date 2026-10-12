@@ -4,6 +4,7 @@
 #include "admin_api.h"
 #include "admin_auth.h"
 #include "storage_verify_api.h"
+#include "process_api.h"
 #include "cJSON.h"
 #include "diagnostics.h"
 #include "image_ab.h"
@@ -243,14 +244,14 @@ static void register_core3_routes(httpd_handle_t server)
         ESP_LOGE(TAG, "CORE-3 route registration failed health=%s control=%s admin=%s",
                  esp_err_to_name(a), esp_err_to_name(b), esp_err_to_name(c));
     } else {
-        ESP_LOGI(TAG, "CORE-3C API ready: /health /control/status /admin/status /admin/storage/verify");
+        ESP_LOGI(TAG, "CORE-4A API ready: diagnostics + storage verify + local processing");
     }
 }
 
 esp_err_t __wrap_httpd_start(httpd_handle_t *handle, const httpd_config_t *config)
 {
     httpd_config_t expanded = *config;
-    if (expanded.max_uri_handlers < 36) expanded.max_uri_handlers = 36;
+    if (expanded.max_uri_handlers < 40) expanded.max_uri_handlers = 40;
 
     esp_err_t err = __real_httpd_start(handle, &expanded);
     if (err != ESP_OK) return err;
@@ -260,10 +261,10 @@ esp_err_t __wrap_httpd_start(httpd_handle_t *handle, const httpd_config_t *confi
         ESP_LOGW(TAG, "Diagnostics persistence unavailable: %s", esp_err_to_name(diag));
     }
 
-    /* Register protected mutations before legacy wifi_portal registers its routes.
-       Duplicate legacy registrations then fail closed while these handlers remain active. */
+    /* Protected admin/storage/processing routes are registered before legacy routes. */
     prisma_admin_register_routes(*handle);
     prisma_storage_verify_register_routes(*handle);
+    prisma_process_register_routes(*handle);
     register_core3_routes(*handle);
     return ESP_OK;
 }
