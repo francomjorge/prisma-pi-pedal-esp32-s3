@@ -1,0 +1,1 @@
+CORE-1A intentionally keeps SPIFFS but does not depend on bundled media for the boot/partition test.
