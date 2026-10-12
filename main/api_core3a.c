@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "admin_api.h"
+#include "admin_auth.h"
 #include "cJSON.h"
 #include "diagnostics.h"
 #include "image_ab.h"
@@ -178,6 +180,8 @@ static esp_err_t control_status_get(httpd_req_t *r)
 
 static esp_err_t admin_status_get(httpd_req_t *r)
 {
+    if (!prisma_admin_authorize(r)) return ESP_OK;
+
     char device_id[20];
     char hostname[32];
     make_identity(device_id, sizeof(device_id), hostname, sizeof(hostname));
@@ -190,8 +194,10 @@ static esp_err_t admin_status_get(httpd_req_t *r)
 
     cJSON *security = cJSON_AddObjectToObject(root, "security");
     if (security) {
-        cJSON_AddBoolToObject(security, "admin_auth", false);
-        cJSON_AddStringToObject(security, "next", "core3b");
+        cJSON_AddBoolToObject(security, "admin_auth", true);
+        cJSON_AddStringToObject(security, "scheme", "http-basic");
+        cJSON_AddStringToObject(security, "username", PRISMA_ADMIN_USERNAME);
+        cJSON_AddStringToObject(security, "transport", "http-lan");
     }
 
     cJSON *system = prisma_diagnostics_system_json();
@@ -217,7 +223,7 @@ static esp_err_t admin_status_get(httpd_req_t *r)
     return send_json(r, root);
 }
 
-static void register_core3a_routes(httpd_handle_t server)
+static void register_core3_routes(httpd_handle_t server)
 {
     static const httpd_uri_t health = {
         .uri = "/api/v1/health", .method = HTTP_GET, .handler = health_get
@@ -233,17 +239,17 @@ static void register_core3a_routes(httpd_handle_t server)
     esp_err_t b = httpd_register_uri_handler(server, &control_status);
     esp_err_t c = httpd_register_uri_handler(server, &admin_status);
     if (a != ESP_OK || b != ESP_OK || c != ESP_OK) {
-        ESP_LOGE(TAG, "CORE-3A route registration failed health=%s control=%s admin=%s",
+        ESP_LOGE(TAG, "CORE-3 route registration failed health=%s control=%s admin=%s",
                  esp_err_to_name(a), esp_err_to_name(b), esp_err_to_name(c));
     } else {
-        ESP_LOGI(TAG, "CORE-3A API ready: /health /control/status /admin/status");
+        ESP_LOGI(TAG, "CORE-3B API ready: /health /control/status /admin/status");
     }
 }
 
 esp_err_t __wrap_httpd_start(httpd_handle_t *handle, const httpd_config_t *config)
 {
     httpd_config_t expanded = *config;
-    if (expanded.max_uri_handlers < 24) expanded.max_uri_handlers = 24;
+    if (expanded.max_uri_handlers < 32) expanded.max_uri_handlers = 32;
 
     esp_err_t err = __real_httpd_start(handle, &expanded);
     if (err != ESP_OK) return err;
@@ -252,6 +258,10 @@ esp_err_t __wrap_httpd_start(httpd_handle_t *handle, const httpd_config_t *confi
     if (diag != ESP_OK) {
         ESP_LOGW(TAG, "Diagnostics persistence unavailable: %s", esp_err_to_name(diag));
     }
-    register_core3a_routes(*handle);
+
+    /* Register protected mutations before legacy wifi_portal registers its routes.
+       Duplicate legacy registrations then fail closed while these handlers remain active. */
+    prisma_admin_register_routes(*handle);
+    register_core3_routes(*handle);
     return ESP_OK;
 }
