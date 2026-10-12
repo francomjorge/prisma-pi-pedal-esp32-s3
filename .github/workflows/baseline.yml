@@ -1,0 +1,58 @@
+name: BASELINE-0 golden build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-golden:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout core manifest
+        uses: actions/checkout@v4
+
+      - name: Checkout exact hardware-validated source
+        uses: actions/checkout@v4
+        with:
+          repository: francomjorge/prisma-pi-lite-waveshare-esp32-s3-touch-lcd-1-54
+          ref: 0fb5c8dc39c562c27afdd2ba3a2bc863506899ea
+          path: golden
+
+      - name: Verify golden commit
+        run: |
+          cd golden
+          test "$(git rev-parse HEAD)" = "0fb5c8dc39c562c27afdd2ba3a2bc863506899ea"
+
+      - name: Build exact golden source
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: golden
+          command: idf.py build
+
+      - name: Create merged 16 MB recovery/factory image
+        run: |
+          cd golden
+          python -m esptool --chip esp32s3 merge-bin \
+            --flash-mode dio --flash-freq 80m --flash-size 16MB \
+            -o build/PRISMA-PI-PEDAL-BASELINE0-16MB.bin \
+            0x000000 build/bootloader/bootloader.bin \
+            0x008000 build/partition_table/partition-table.bin \
+            0x00f000 build/ota_data_initial.bin \
+            0x020000 build/prisma_pi_lite_esp32s3.bin \
+            0xc20000 build/storage.bin
+          test "$(stat -c%s build/PRISMA-PI-PEDAL-BASELINE0-16MB.bin)" -eq 16777216
+          sha256sum build/PRISMA-PI-PEDAL-BASELINE0-16MB.bin > build/PRISMA-PI-PEDAL-BASELINE0-16MB.sha256
+
+      - name: Upload baseline artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-baseline0
+          if-no-files-found: error
+          path: |
+            golden/build/PRISMA-PI-PEDAL-BASELINE0-16MB.bin
+            golden/build/PRISMA-PI-PEDAL-BASELINE0-16MB.sha256
+            golden/build/flash_args
+            golden/build/flasher_args.json

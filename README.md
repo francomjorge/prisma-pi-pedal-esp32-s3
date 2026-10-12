@@ -1,65 +1,28 @@
 # PRISMA-PI PEDAL — ESP32-S3 CORE
 
-Common factory/core firmware for the PRISMA-PI single-effect pedal family.
+Reusable infrastructure/factory baseline for the PRISMA-PI single-effect pedal family.
 
-Hardware target: Waveshare ESP32-S3-Touch-LCD-1.54 (SKU 33869), ESP32-S3R8, 16 MB flash, 8 MB PSRAM, ST7789 240x240 display, CST816S touch.
+## Baseline policy
 
-## Scope
+`main` starts from a hardware-validated golden firmware. The golden source is pinned by commit and rebuilt without functional changes before any infrastructure refactor is accepted.
 
-This repository is the reusable infrastructure layer. Product/effect logic (POSTER first) lives in a separate repository and must not be coupled into the core.
+Current golden source:
 
-Order of work:
+- Repository: `francomjorge/prisma-pi-lite-waveshare-esp32-s3-touch-lcd-1-54`
+- Commit: `0fb5c8dc39c562c27afdd2ba3a2bc863506899ea`
+- ESP-IDF: `v5.5.1`
+- Target: `esp32s3`
+- Flash: 16 MB
 
-1. Factory/core infrastructure.
-2. Safe media storage and validation.
-3. Wi-Fi provisioning, discovery, Admin/API and streaming services.
-4. Freeze a reusable factory baseline.
-5. Build the POSTER pedal as source -> POSTER -> output.
+The previous experimental CORE-1 implementation that failed to boot on hardware is preserved in branch `archive/core1-failed` and must not be used as a factory baseline.
 
-## Fixed decisions
+## Development sequence
 
-- ESP-IDF 5.5.1.
-- No OTA partitions and no OTA update path.
-- Full 16 MB factory image flashed at `0x000000`.
-- Application starts at `0x020000`.
-- GPIO2 is the battery/power hold line.
-- Media is stored transactionally in A/B raw flash slots:
-  - IMAGE_A / IMAGE_B: 1 MB each.
-  - VIDEO_A / VIDEO_B: 3 MB each.
-- Slot activation is metadata-driven and requires header + length + CRC32 validation before switching active media.
-
-## Infrastructure milestones
-
-### CORE-1 — hardware + factory + flash map
-
-- boot/power hold
-- ST7789 display
-- CST816S touch + swipe primitive
-- 16 MB non-OTA partition table
-- A/B media slot discovery/validation
-- deterministic factory image generation
-
-### CORE-2 — network services
-
-- Wi-Fi STA
-- provisioning AP + scan + DHCP
-- persistent credentials/config
-- mDNS + UDP discovery
-- stable Device ID
-
-### CORE-3 — management plane
-
-- authenticated Admin
-- common REST API
-- media upload into inactive A/B slot
-- CRC/validation/atomic activation/recovery
-- image/video streaming endpoints
-
-### CORE-4 — factory freeze
-
-- integration test on hardware
-- power-cycle/recovery tests
-- produce final 16 MB factory binary
-- tag reusable core baseline
-
-POSTER is implemented only after CORE-4 is stable.
+1. BASELINE-0: rebuild the exact known-good firmware from the pinned source commit and validate it on hardware.
+2. CORE-1A: change only the partition/storage layout.
+3. CORE-1B: IMAGE A/B transactional storage.
+4. CORE-1C: VIDEO A/B transactional storage.
+5. CORE-2: Wi-Fi STA + provisioning AP + discovery.
+6. CORE-3: authenticated Admin/API + media upload/activation + streaming.
+7. CORE-4: freeze reusable factory infrastructure.
+8. Product repository (`Prisma-Pi-poster`): add the single POSTER effect.
