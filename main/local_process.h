@@ -13,6 +13,8 @@ typedef struct {
     bool valid;
     char last_test[16];
     char error[96];
+    uint16_t source_width;
+    uint16_t source_height;
     uint16_t width;
     uint16_t height;
     uint32_t elapsed_ms;
