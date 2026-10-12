@@ -5,11 +5,30 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>PRISMA-PI LITE</title>
 <link rel="stylesheet" href="/style.css">
-<style>.photo .sourcePreview{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:1}.photo.off .sourcePreview{opacity:.18}.fsBtn{position:absolute;right:10px;bottom:10px;z-index:4;border:1px solid #23dcdc;background:#071019dd;color:#f0f5fa;border-radius:10px;padding:10px 12px;font-size:10px;font-weight:900;letter-spacing:1px}.photo.pseudoFull{position:fixed;inset:0;width:100vw;height:100vh;max-height:none;border-radius:0;z-index:9999;background:#000}.photo.pseudoFull .sourcePreview{width:100%;height:100%;object-fit:contain}.photo:fullscreen,.photo:-webkit-full-screen{width:100vw;height:100vh;max-height:none;border-radius:0;background:#000}.photo:fullscreen .sourcePreview,.photo:-webkit-full-screen .sourcePreview{width:100%;height:100%;object-fit:contain}</style>
+<style>
+.photo .sourcePreview{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;z-index:1}.photo.off .sourcePreview{opacity:.18}.fsBtn{position:absolute;right:10px;bottom:10px;z-index:4;border:1px solid #23dcdc;background:#071019dd;color:#f0f5fa;border-radius:10px;padding:10px 12px;font-size:10px;font-weight:900;letter-spacing:1px}.photo.pseudoFull{position:fixed;inset:0;width:100vw;height:100vh;max-height:none;border-radius:0;z-index:9999;background:#000}.photo.pseudoFull .sourcePreview{width:100%;height:100%;object-fit:contain}.photo:fullscreen,.photo:-webkit-full-screen{width:100vw;height:100vh;max-height:none;border-radius:0;background:#000}.photo:fullscreen .sourcePreview,.photo:-webkit-full-screen .sourcePreview{width:100%;height:100%;object-fit:contain}
+.wifiBtn{position:fixed;right:12px;top:12px;z-index:10020;border:1px solid #23dcdc;background:#071019ee;color:#eafcff;border-radius:10px;padding:9px 11px;font-size:10px;font-weight:900;letter-spacing:1px}.wifiShade{display:none;position:fixed;inset:0;z-index:10010;background:#000c;align-items:center;justify-content:center;padding:18px}.wifiShade.open{display:flex}.wifiPanel{width:min(420px,92vw);background:#071019;border:1px solid #23dcdc;border-radius:16px;padding:18px;box-sizing:border-box;color:#f0f5fa;box-shadow:0 12px 40px #000}.wifiTitle{font-size:18px;font-weight:900;letter-spacing:1px;margin-bottom:4px}.wifiSub{font-size:11px;opacity:.65;margin-bottom:14px}.wifiLabel{display:block;font-size:10px;font-weight:900;letter-spacing:1px;margin:12px 0 5px;color:#23dcdc}.wifiInput,.wifiSelect{width:100%;box-sizing:border-box;border:1px solid #2b4350;background:#02070b;color:#fff;border-radius:9px;padding:11px;font-size:14px}.wifiRow{display:flex;gap:8px;margin-top:14px}.wifiAction{flex:1;border:1px solid #23dcdc;background:#0b2730;color:#fff;border-radius:10px;padding:11px;font-weight:900;font-size:11px;letter-spacing:.6px}.wifiAction.secondary{border-color:#54636b;background:#12181c}.wifiStatus{min-height:34px;margin-top:12px;font-size:11px;line-height:1.4;color:#c8d4da;word-break:break-word}
+</style>
 </head>
 <body>
 <div class="top"></div>
 <header class="head"><div class="logo">PRISMA<span>-PI</span></div><div class="sub">LITE / CONTROLLER</div></header>
+<button id="wifiBtn" class="wifiBtn" type="button" data-control="1">WIFI</button>
+<div id="wifiShade" class="wifiShade" data-control="1">
+  <div class="wifiPanel">
+    <div class="wifiTitle">WIFI SETUP</div>
+    <div class="wifiSub">PRISMA-Pi network provisioning</div>
+    <label class="wifiLabel" for="wifiScan">FOUND NETWORKS</label>
+    <select id="wifiScan" class="wifiSelect"><option value="">Tap SCAN or type SSID below</option></select>
+    <label class="wifiLabel" for="wifiSsid">SSID</label>
+    <input id="wifiSsid" class="wifiInput" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Wi-Fi name">
+    <label class="wifiLabel" for="wifiPass">PASSWORD</label>
+    <input id="wifiPass" class="wifiInput" type="password" autocomplete="new-password" placeholder="Wi-Fi password">
+    <div class="wifiRow"><button id="wifiScanBtn" class="wifiAction secondary" type="button">SCAN</button><button id="wifiConnectBtn" class="wifiAction" type="button">CONNECT</button></div>
+    <div id="wifiStatus" class="wifiStatus">Ready.</div>
+    <div class="wifiRow"><button id="wifiCloseBtn" class="wifiAction secondary" type="button">CLOSE</button></div>
+  </div>
+</div>
 <main id="v" class="viewport"><div id="t" class="track">
 <section class="page"><div class="hero"><div class="big">PRISMA-PI</div><div class="tag">LITE</div><div class="synth">VIDEO SYNTHESIZER</div></div></section>
 <section class="page"><div id="controls"><div class="card"><div class="row"><div id="sourceSelect" class="sourceSelect" data-control="1"><div class="label">NOW PLAYING</div><div id="filename" class="value">F1_MOON.JPG</div></div><div id="power" class="power" data-control="1">ON</div></div></div><div class="card"><div class="row compact"><div class="label stronglabel">INTENSITY</div><div id="pct" class="intensityValue">61%</div></div><div id="intensityBar" class="bar" data-control="1"><div id="fill" class="fill"></div></div></div><div class="card modecard"><div class="label stronglabel">MODE</div><div id="mode" class="mode" data-control="1">RANDOM</div></div></div></section>
@@ -38,6 +57,16 @@ function drawPage4(s){var ef=Array.isArray(s.effects)?s.effects:[],vals=Array.is
 function drawAll(s){drawPage2(s);drawPage4(s)}
 function scheduleSync(delay){clearTimeout(syncTimer);syncTimer=setTimeout(syncAll,delay)}
 function syncAll(){if(syncBusy){scheduleSync(100);return}syncBusy=true;var x=new XMLHttpRequest();x.open('GET','/api/state?ts='+Date.now(),true);x.timeout=1500;x.onload=function(){syncBusy=false;if(x.status===200){try{var s=JSON.parse(x.responseText),j=JSON.stringify(s);if(j!==stateLast){stateLast=j;drawAll(s)}scheduleSync(300);return}catch(e){}}scheduleSync(600)};x.onerror=x.ontimeout=function(){syncBusy=false;scheduleSync(600)};x.send(null)}
+
+var wifiShade=document.getElementById('wifiShade'),wifiScan=document.getElementById('wifiScan'),wifiSsid=document.getElementById('wifiSsid'),wifiPass=document.getElementById('wifiPass'),wifiStatus=document.getElementById('wifiStatus');
+function wifiMsg(s){wifiStatus.textContent=s}
+function wifiOpen(){wifiShade.classList.add('open');wifiMsg('Ready. Tap SCAN or type the SSID.');wifiLoadStatus()}
+function wifiClose(){wifiShade.classList.remove('open')}
+function wifiLoadStatus(){var x=new XMLHttpRequest();x.open('GET','/api/v1/wifi/status?ts='+Date.now(),true);x.timeout=1800;x.onload=function(){if(x.status===200){try{var s=JSON.parse(x.responseText);if(s.connected)wifiMsg('Connected to '+s.ssid+' · '+s.ip);else wifiMsg('Provisioning mode · '+(s.ap_ssid||'PRISMA-PI'))}catch(e){}}};x.send(null)}
+function wifiDoScan(){wifiMsg('Scanning...');wifiScan.innerHTML='<option value="">Scanning...</option>';var x=new XMLHttpRequest();x.open('GET','/api/v1/wifi/scan?ts='+Date.now(),true);x.timeout=12000;x.onload=function(){if(x.status!==200){wifiMsg('Scan failed. You can type the SSID manually.');return}try{var r=JSON.parse(x.responseText),a=Array.isArray(r.networks)?r.networks:[];wifiScan.innerHTML='<option value="">Select a network</option>';for(var i=0;i<a.length;i++){if(!a[i].ssid)continue;var o=document.createElement('option');o.value=a[i].ssid;o.textContent=a[i].ssid+'  ('+a[i].rssi+' dBm)';wifiScan.appendChild(o)}wifiMsg(a.length?'Select a network, enter password, then CONNECT.':'No networks found. Type SSID manually.')}catch(e){wifiMsg('Invalid scan response. Type SSID manually.')}};x.onerror=x.ontimeout=function(){wifiMsg('Scan timeout. Type SSID manually.')};x.send(null)}
+function wifiConnect(){var ssid=(wifiSsid.value||'').trim(),pass=wifiPass.value||'';if(!ssid){wifiMsg('Enter or select an SSID.');return}if(ssid.length>32||pass.length>63){wifiMsg('SSID or password is too long.');return}wifiMsg('Saving Wi-Fi and restarting...');var x=new XMLHttpRequest();x.open('POST','/api/v1/wifi/connect',true);x.setRequestHeader('Content-Type','application/json');x.timeout=5000;x.onload=function(){if(x.status>=200&&x.status<300){wifiMsg('Saved. Pedal is restarting and will join '+ssid+'.');return}wifiMsg('Could not save Wi-Fi: '+x.responseText)};x.onerror=x.ontimeout=function(){wifiMsg('Connection closed while restarting. Check your Wi-Fi network in a few seconds.')};x.send(JSON.stringify({ssid:ssid,password:pass}))}
+document.getElementById('wifiBtn').addEventListener('click',wifiOpen);document.getElementById('wifiCloseBtn').addEventListener('click',wifiClose);document.getElementById('wifiScanBtn').addEventListener('click',wifiDoScan);document.getElementById('wifiConnectBtn').addEventListener('click',wifiConnect);wifiScan.addEventListener('change',function(){if(this.value)wifiSsid.value=this.value});wifiShade.addEventListener('click',function(e){if(e.target===wifiShade)wifiClose()});
+
 syncAll();
 </script>
 </body></html>
