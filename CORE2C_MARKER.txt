@@ -1,1 +1,0 @@
-CORE-2C UDP discovery branch marker
