@@ -16,15 +16,21 @@ typedef struct {
     size_t source_bytes;
     uint16_t frame_count;
     uint16_t last_frame;
+    uint16_t source_width;
+    uint16_t source_height;
     uint16_t width;
     uint16_t height;
+    uint8_t min_scale_div;
+    uint8_t scale_div;
     uint32_t last_frame_ms;
     size_t pixel_bytes;
+    size_t transport_bytes;
     size_t free_psram;
 } prisma_video_process_status_t;
 
 esp_err_t prisma_video_process_init(void);
 esp_err_t prisma_video_process_prepare(void);
-esp_err_t prisma_video_process_render_frame(uint16_t index);
+esp_err_t prisma_video_process_render_frame(uint16_t index, uint8_t requested_div);
 esp_err_t prisma_video_process_get_status(prisma_video_process_status_t *out);
+esp_err_t prisma_video_process_send_indexed(httpd_req_t *req);
 esp_err_t prisma_video_process_send_bmp(httpd_req_t *req);
