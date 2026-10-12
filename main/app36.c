@@ -2,6 +2,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "storage.h"
+#include "image_ab.h"
 
 #define synth_on prisma_shared_on
 #define mode_index prisma_shared_mode
@@ -32,6 +33,8 @@ void app_main(void)
     prisma_shared_mode = 0;
     prisma_shared_intensity = 61;
     prisma_storage_init();
-    ESP_LOGI(SYNC_TAG, "M4.9 GLOBAL WEB SYNC ACTIVE - DIRECT APPLIANCE GETTERS");
+    esp_err_t image_ab = prisma_image_ab_init();
+    if (image_ab != ESP_OK) ESP_LOGW(SYNC_TAG, "IMAGE A/B unavailable: %s", esp_err_to_name(image_ab));
+    ESP_LOGI(SYNC_TAG, "CORE-1B IMAGE A/B ACTIVE - LEGACY UI PATH UNCHANGED");
     prisma_legacy_main();
 }
