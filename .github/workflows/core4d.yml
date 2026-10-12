@@ -1,0 +1,54 @@
+name: CORE-4D flash-stream video processing test
+
+on:
+  push:
+    branches: [core4d-video-flash-stream]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify CORE-4D contract
+        run: |
+          grep -q 'CONFIG_SPIRAM=y' sdkconfig
+          grep -q 'CONFIG_SPIRAM_MODE_OCT=y' sdkconfig
+          grep -q 'index_video_from_flash' main/video_process.c
+          grep -q 'SCAN_CHUNK_BYTES' main/video_process.c
+          grep -q 'prisma_video_ab_read(base, chunk, len)' main/video_process.c
+          grep -q 'prisma_video_ab_read(ref->offset, jpeg, ref->length)' main/video_process.c
+          grep -q 'esp_jpeg_decode' main/video_process.c
+          grep -q 'posterize_rgb565' main/video_process.c
+          grep -q 'CORE-4C VIDEO routes registered lazy' main/video_process_api.c
+          grep -q 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -q 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core4d_factory.py
+          test "$(stat -c%s dist/PRISMA-PI-PEDAL-CORE4D-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-PEDAL-CORE4D-16MB.bin > dist/PRISMA-PI-PEDAL-CORE4D-16MB.sha256
+
+      - name: Upload CORE-4D
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core4d
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-PEDAL-CORE4D-16MB.bin
+            dist/PRISMA-PI-PEDAL-CORE4D-16MB.sha256
+            build/prisma_pi_pedal_core4d.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/storage.bin
