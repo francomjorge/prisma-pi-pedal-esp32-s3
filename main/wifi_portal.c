@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "wifi_portal.h"
 #include "image_ab.h"
+#include "video_ab.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -68,140 +69,61 @@ static esp_err_t source_get(httpd_req_t*r)
 
 static esp_err_t image_info_get(httpd_req_t *r)
 {
-    prisma_image_info_t info;
-    esp_err_t err = prisma_image_ab_get_info(&info);
-    if (err != ESP_OK) {
-        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE A/B unavailable");
-        return err;
-    }
-    char b[192];
-    int n = snprintf(b, sizeof(b),
-                     "{\"ready\":%s,\"valid\":%s,\"active_bank\":\"%c\",\"generation\":%lu,\"size\":%u,\"crc32\":\"%08lx\"}",
-                     info.ready ? "true" : "false",
-                     info.valid ? "true" : "false",
-                     info.active_bank,
-                     (unsigned long)info.generation,
-                     (unsigned)info.size,
-                     (unsigned long)info.crc32);
-    if (n < 0 || n >= (int)sizeof(b)) return ESP_FAIL;
-    httpd_resp_set_type(r, "application/json");
-    no_cache(r);
-    return httpd_resp_send(r, b, n);
+    prisma_image_info_t info;esp_err_t err=prisma_image_ab_get_info(&info);
+    if(err!=ESP_OK){httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"IMAGE A/B unavailable");return err;}
+    char b[192];int n=snprintf(b,sizeof(b),"{\"ready\":%s,\"valid\":%s,\"active_bank\":\"%c\",\"generation\":%lu,\"size\":%u,\"crc32\":\"%08lx\"}",info.ready?"true":"false",info.valid?"true":"false",info.active_bank,(unsigned long)info.generation,(unsigned)info.size,(unsigned long)info.crc32);
+    if(n<0||n>=(int)sizeof(b))return ESP_FAIL;httpd_resp_set_type(r,"application/json");no_cache(r);return httpd_resp_send(r,b,n);
 }
 
 static esp_err_t image_put(httpd_req_t *r)
 {
-    size_t total = (size_t)r->content_len;
-    if (total < 4 || total > PRISMA_IMAGE_MAX_BYTES) {
-        httpd_resp_set_status(r, "413 Payload Too Large");
-        return httpd_resp_send(r, "IMAGE must be JPEG <= 1 MB", HTTPD_RESP_USE_STRLEN);
-    }
-
-    esp_err_t err = prisma_image_ab_begin(total);
-    if (err != ESP_OK) {
-        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot start IMAGE upload");
-        return err;
-    }
-
-    uint8_t buf[1024];
-    size_t offset = 0;
-    uint8_t first0 = 0, first1 = 0, last0 = 0, last1 = 0;
-    while (offset < total) {
-        size_t want = total - offset;
-        if (want > sizeof(buf)) want = sizeof(buf);
-        int got = httpd_req_recv(r, (char *)buf, want);
-        if (got == HTTPD_SOCK_ERR_TIMEOUT) continue;
-        if (got <= 0) {
-            prisma_image_ab_abort();
-            httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE upload interrupted");
-            return ESP_FAIL;
-        }
-
-        for (int i = 0; i < got; ++i) {
-            size_t pos = offset + (size_t)i;
-            if (pos == 0) first0 = buf[i];
-            if (pos == 1) first1 = buf[i];
-            last0 = last1;
-            last1 = buf[i];
-        }
-
-        err = prisma_image_ab_write(offset, buf, (size_t)got);
-        if (err != ESP_OK) {
-            prisma_image_ab_abort();
-            httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE flash write failed");
-            return err;
-        }
-        offset += (size_t)got;
-    }
-
-    if (first0 != 0xFF || first1 != 0xD8 || last0 != 0xFF || last1 != 0xD9) {
-        prisma_image_ab_abort();
-        httpd_resp_set_status(r, "415 Unsupported Media Type");
-        return httpd_resp_send(r, "Invalid JPEG markers; previous IMAGE remains active", HTTPD_RESP_USE_STRLEN);
-    }
-
-    err = prisma_image_ab_finalize();
-    if (err != ESP_OK) {
-        prisma_image_ab_abort();
-        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE commit failed");
-        return err;
-    }
-
-    prisma_image_info_t info;
-    if (prisma_image_ab_get_info(&info) != ESP_OK) {
-        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE committed but status unavailable");
-        return ESP_FAIL;
-    }
-    char b[160];
-    int n = snprintf(b, sizeof(b),
-                     "{\"ok\":true,\"active_bank\":\"%c\",\"generation\":%lu,\"size\":%u,\"crc32\":\"%08lx\"}",
-                     info.active_bank,
-                     (unsigned long)info.generation,
-                     (unsigned)info.size,
-                     (unsigned long)info.crc32);
-    httpd_resp_set_type(r, "application/json");
-    no_cache(r);
-    return httpd_resp_send(r, b, n);
+    size_t total=(size_t)r->content_len;if(total<4||total>PRISMA_IMAGE_MAX_BYTES){httpd_resp_set_status(r,"413 Payload Too Large");return httpd_resp_send(r,"IMAGE must be JPEG <= 1 MB",HTTPD_RESP_USE_STRLEN);}
+    esp_err_t err=prisma_image_ab_begin(total);if(err!=ESP_OK){httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"Cannot start IMAGE upload");return err;}
+    uint8_t buf[1024];size_t offset=0;uint8_t first0=0,first1=0,last0=0,last1=0;
+    while(offset<total){size_t want=total-offset;if(want>sizeof(buf))want=sizeof(buf);int got=httpd_req_recv(r,(char*)buf,want);if(got==HTTPD_SOCK_ERR_TIMEOUT)continue;if(got<=0){prisma_image_ab_abort();httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"IMAGE upload interrupted");return ESP_FAIL;}for(int i=0;i<got;++i){size_t pos=offset+(size_t)i;if(pos==0)first0=buf[i];if(pos==1)first1=buf[i];last0=last1;last1=buf[i];}err=prisma_image_ab_write(offset,buf,(size_t)got);if(err!=ESP_OK){prisma_image_ab_abort();httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"IMAGE flash write failed");return err;}offset+=(size_t)got;}
+    if(first0!=0xFF||first1!=0xD8||last0!=0xFF||last1!=0xD9){prisma_image_ab_abort();httpd_resp_set_status(r,"415 Unsupported Media Type");return httpd_resp_send(r,"Invalid JPEG markers; previous IMAGE remains active",HTTPD_RESP_USE_STRLEN);}
+    err=prisma_image_ab_finalize();if(err!=ESP_OK){prisma_image_ab_abort();httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"IMAGE commit failed");return err;}
+    prisma_image_info_t info;if(prisma_image_ab_get_info(&info)!=ESP_OK){httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"IMAGE committed but status unavailable");return ESP_FAIL;}char b[160];int n=snprintf(b,sizeof(b),"{\"ok\":true,\"active_bank\":\"%c\",\"generation\":%lu,\"size\":%u,\"crc32\":\"%08lx\"}",info.active_bank,(unsigned long)info.generation,(unsigned)info.size,(unsigned long)info.crc32);httpd_resp_set_type(r,"application/json");no_cache(r);return httpd_resp_send(r,b,n);
 }
 
 static esp_err_t image_get(httpd_req_t *r)
 {
-    prisma_image_info_t info;
-    esp_err_t err = prisma_image_ab_get_info(&info);
-    if (err != ESP_OK || !info.valid) {
-        httpd_resp_send_err(r, HTTPD_404_NOT_FOUND, "No active IMAGE");
-        return ESP_FAIL;
-    }
-
-    httpd_resp_set_type(r, "image/jpeg");
-    no_cache(r);
-    uint8_t buf[1024];
-    size_t offset = 0;
-    while (offset < info.size) {
-        size_t take = info.size - offset;
-        if (take > sizeof(buf)) take = sizeof(buf);
-        err = prisma_image_ab_read(offset, buf, take);
-        if (err != ESP_OK) {
-            httpd_resp_send_chunk(r, NULL, 0);
-            return err;
-        }
-        err = httpd_resp_send_chunk(r, (const char *)buf, take);
-        if (err != ESP_OK) return err;
-        offset += take;
-    }
-    return httpd_resp_send_chunk(r, NULL, 0);
+    prisma_image_info_t info;esp_err_t err=prisma_image_ab_get_info(&info);if(err!=ESP_OK||!info.valid){httpd_resp_send_err(r,HTTPD_404_NOT_FOUND,"No active IMAGE");return ESP_FAIL;}
+    httpd_resp_set_type(r,"image/jpeg");no_cache(r);uint8_t buf[1024];size_t offset=0;while(offset<info.size){size_t take=info.size-offset;if(take>sizeof(buf))take=sizeof(buf);err=prisma_image_ab_read(offset,buf,take);if(err!=ESP_OK){httpd_resp_send_chunk(r,NULL,0);return err;}err=httpd_resp_send_chunk(r,(const char*)buf,take);if(err!=ESP_OK)return err;offset+=take;}return httpd_resp_send_chunk(r,NULL,0);
 }
 
 static esp_err_t image_delete(httpd_req_t *r)
 {
-    esp_err_t err = prisma_image_ab_delete();
-    if (err != ESP_OK) {
-        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE delete failed");
-        return err;
-    }
-    httpd_resp_set_type(r, "application/json");
-    no_cache(r);
-    return httpd_resp_send(r, "{\"ok\":true,\"valid\":false}", HTTPD_RESP_USE_STRLEN);
+    esp_err_t err=prisma_image_ab_delete();if(err!=ESP_OK){httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"IMAGE delete failed");return err;}httpd_resp_set_type(r,"application/json");no_cache(r);return httpd_resp_send(r,"{\"ok\":true,\"valid\":false}",HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t video_info_get(httpd_req_t *r)
+{
+    prisma_video_info_t info;esp_err_t err=prisma_video_ab_get_info(&info);
+    if(err!=ESP_OK){httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"VIDEO A/B unavailable");return err;}
+    char b[192];int n=snprintf(b,sizeof(b),"{\"ready\":%s,\"valid\":%s,\"active_bank\":\"%c\",\"generation\":%lu,\"size\":%u,\"crc32\":\"%08lx\"}",info.ready?"true":"false",info.valid?"true":"false",info.active_bank,(unsigned long)info.generation,(unsigned)info.size,(unsigned long)info.crc32);
+    if(n<0||n>=(int)sizeof(b))return ESP_FAIL;httpd_resp_set_type(r,"application/json");no_cache(r);return httpd_resp_send(r,b,n);
+}
+
+static esp_err_t video_put(httpd_req_t *r)
+{
+    size_t total=(size_t)r->content_len;if(total==0||total>PRISMA_VIDEO_MAX_BYTES){httpd_resp_set_status(r,"413 Payload Too Large");return httpd_resp_send(r,"VIDEO payload must be <= 3 MB",HTTPD_RESP_USE_STRLEN);}
+    esp_err_t err=prisma_video_ab_begin(total);if(err!=ESP_OK){httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"Cannot start VIDEO upload");return err;}
+    uint8_t buf[1024];size_t offset=0;
+    while(offset<total){size_t want=total-offset;if(want>sizeof(buf))want=sizeof(buf);int got=httpd_req_recv(r,(char*)buf,want);if(got==HTTPD_SOCK_ERR_TIMEOUT)continue;if(got<=0){prisma_video_ab_abort();httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"VIDEO upload interrupted");return ESP_FAIL;}err=prisma_video_ab_write(offset,buf,(size_t)got);if(err!=ESP_OK){prisma_video_ab_abort();httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"VIDEO flash write failed");return err;}offset+=(size_t)got;}
+    err=prisma_video_ab_finalize();if(err!=ESP_OK){prisma_video_ab_abort();httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"VIDEO commit failed");return err;}
+    prisma_video_info_t info;if(prisma_video_ab_get_info(&info)!=ESP_OK){httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"VIDEO committed but status unavailable");return ESP_FAIL;}char b[160];int n=snprintf(b,sizeof(b),"{\"ok\":true,\"active_bank\":\"%c\",\"generation\":%lu,\"size\":%u,\"crc32\":\"%08lx\"}",info.active_bank,(unsigned long)info.generation,(unsigned)info.size,(unsigned long)info.crc32);httpd_resp_set_type(r,"application/json");no_cache(r);return httpd_resp_send(r,b,n);
+}
+
+static esp_err_t video_get(httpd_req_t *r)
+{
+    prisma_video_info_t info;esp_err_t err=prisma_video_ab_get_info(&info);if(err!=ESP_OK||!info.valid){httpd_resp_send_err(r,HTTPD_404_NOT_FOUND,"No active VIDEO");return ESP_FAIL;}
+    httpd_resp_set_type(r,"application/octet-stream");no_cache(r);uint8_t buf[1024];size_t offset=0;while(offset<info.size){size_t take=info.size-offset;if(take>sizeof(buf))take=sizeof(buf);err=prisma_video_ab_read(offset,buf,take);if(err!=ESP_OK){httpd_resp_send_chunk(r,NULL,0);return err;}err=httpd_resp_send_chunk(r,(const char*)buf,take);if(err!=ESP_OK)return err;offset+=take;}return httpd_resp_send_chunk(r,NULL,0);
+}
+
+static esp_err_t video_delete(httpd_req_t *r)
+{
+    esp_err_t err=prisma_video_ab_delete();if(err!=ESP_OK){httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"VIDEO delete failed");return err;}httpd_resp_set_type(r,"application/json");no_cache(r);return httpd_resp_send(r,"{\"ok\":true,\"valid\":false}",HTTPD_RESP_USE_STRLEN);
 }
 
 static void start_portal(void)
@@ -219,10 +141,15 @@ static void start_portal(void)
         httpd_uri_t f={.uri="/api/v1/image",.method=HTTP_PUT,.handler=image_put};
         httpd_uri_t g={.uri="/api/v1/image",.method=HTTP_GET,.handler=image_get};
         httpd_uri_t h={.uri="/api/v1/image",.method=HTTP_DELETE,.handler=image_delete};
+        httpd_uri_t i={.uri="/api/v1/video/info",.method=HTTP_GET,.handler=video_info_get};
+        httpd_uri_t j={.uri="/api/v1/video",.method=HTTP_PUT,.handler=video_put};
+        httpd_uri_t k={.uri="/api/v1/video",.method=HTTP_GET,.handler=video_get};
+        httpd_uri_t l={.uri="/api/v1/video",.method=HTTP_DELETE,.handler=video_delete};
         httpd_register_uri_handler(s,&a);httpd_register_uri_handler(s,&b);httpd_register_uri_handler(s,&c);httpd_register_uri_handler(s,&d);
         httpd_register_uri_handler(s,&e);httpd_register_uri_handler(s,&f);httpd_register_uri_handler(s,&g);httpd_register_uri_handler(s,&h);
+        httpd_register_uri_handler(s,&i);httpd_register_uri_handler(s,&j);httpd_register_uri_handler(s,&k);httpd_register_uri_handler(s,&l);
     }
-    ESP_LOGI(TAG,"PRISMA PEDAL CORE-1C IMAGE API: %s - http://192.168.4.1",ap);
+    ESP_LOGI(TAG,"PRISMA PEDAL CORE-1D IMAGE+VIDEO API: %s - http://192.168.4.1",ap);
 }
 
 void prisma_wifi_start(void)
