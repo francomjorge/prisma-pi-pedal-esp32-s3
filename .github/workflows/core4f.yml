@@ -1,0 +1,59 @@
+name: CORE-4F poster admin separation
+
+on:
+  push:
+    branches: [core4f-admin-poster-tabs]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify CORE-4F contract
+        run: |
+          grep -Fq 'CONFIG_SPIRAM=y' sdkconfig
+          grep -Fq 'CONFIG_SPIRAM_MODE_OCT=y' sdkconfig
+          grep -Fq 'poster_config.c' main/CMakeLists.txt
+          grep -Fq 'poster_cfg' main/poster_config.c
+          grep -Fq '/api/v1/poster/config' main/process_api.c
+          grep -Fq 'SOURCE · SAME AS INPUT' main/web/process.html
+          grep -Fq 'IMAGE PROCESSING' main/web/process.html
+          grep -Fq 'VIDEO PROCESSING' main/web/process.html
+          grep -Fq 'GENERATORS' main/web/process.html
+          grep -Fq 'configured IMAGE output' main/local_process.c
+          grep -Fq 'configured VIDEO output' main/video_process.c
+          grep -Fq 'POSTER64-INDEX8' main/video_process.c
+          grep -Fq 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -Fq 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core4f_factory.py
+          test "$(stat -c%s dist/PRISMA-PI-PEDAL-CORE4F-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-PEDAL-CORE4F-16MB.bin > dist/PRISMA-PI-PEDAL-CORE4F-16MB.sha256
+          sha256sum build/prisma_pi_pedal_core4f.bin > dist/PRISMA-PI-PEDAL-CORE4F-app.sha256
+
+      - name: Upload CORE-4F
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core4f
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-PEDAL-CORE4F-16MB.bin
+            dist/PRISMA-PI-PEDAL-CORE4F-16MB.sha256
+            dist/PRISMA-PI-PEDAL-CORE4F-app.sha256
+            build/prisma_pi_pedal_core4f.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/storage.bin
