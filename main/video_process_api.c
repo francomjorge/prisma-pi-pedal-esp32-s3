@@ -11,7 +11,6 @@
 #include "esp_log.h"
 
 static const char *TAG = "PRISMA_VIDEO_API";
-static const char *BASE = "/api/v1/process/test/video/";
 
 static bool auth(httpd_req_t *r){ return prisma_admin_authorize(r); }
 
@@ -29,10 +28,15 @@ static esp_err_t send_status(httpd_req_t *r)
     cJSON_AddNumberToObject(j,"source_bytes",s.source_bytes);
     cJSON_AddNumberToObject(j,"frame_count",s.frame_count);
     cJSON_AddNumberToObject(j,"last_frame",s.last_frame);
+    cJSON_AddNumberToObject(j,"source_width",s.source_width);
+    cJSON_AddNumberToObject(j,"source_height",s.source_height);
     cJSON_AddNumberToObject(j,"width",s.width);
     cJSON_AddNumberToObject(j,"height",s.height);
+    cJSON_AddNumberToObject(j,"min_scale_div",s.min_scale_div);
+    cJSON_AddNumberToObject(j,"scale_div",s.scale_div);
     cJSON_AddNumberToObject(j,"last_frame_ms",s.last_frame_ms);
     cJSON_AddNumberToObject(j,"pixel_bytes",s.pixel_bytes);
+    cJSON_AddNumberToObject(j,"transport_bytes",s.transport_bytes);
     cJSON_AddNumberToObject(j,"free_psram",s.free_psram);
     char *txt = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
@@ -57,9 +61,9 @@ static esp_err_t prepare_get(httpd_req_t *r)
     return send_status(r);
 }
 
-static esp_err_t frame_get(httpd_req_t *r)
+static esp_err_t frame_get(httpd_req_t *r, bool indexed)
 {
-    char query[64]={0}, val[16]={0};
+    char query[96]={0}, val[16]={0}, divval[8]={0};
     if(httpd_req_get_url_query_str(r,query,sizeof(query))!=ESP_OK ||
        httpd_query_key_value(query,"i",val,sizeof(val))!=ESP_OK){
         httpd_resp_set_status(r,"400 Bad Request");
@@ -70,12 +74,17 @@ static esp_err_t frame_get(httpd_req_t *r)
         httpd_resp_set_status(r,"400 Bad Request");
         return httpd_resp_sendstr(r,"invalid frame index");
     }
-    esp_err_t err=prisma_video_process_render_frame((uint16_t)idx);
+    uint8_t div=0;
+    if(httpd_query_key_value(query,"d",divval,sizeof(divval))==ESP_OK){
+        long d=strtol(divval,NULL,10);
+        if(d==1 || d==2 || d==4 || d==8) div=(uint8_t)d;
+    }
+    esp_err_t err=prisma_video_process_render_frame((uint16_t)idx,div);
     if(err!=ESP_OK){
         httpd_resp_set_status(r,err==ESP_ERR_INVALID_ARG?"416 Range Not Satisfiable":"500 Internal Server Error");
         return httpd_resp_sendstr(r,"video frame processing failed");
     }
-    return prisma_video_process_send_bmp(r);
+    return indexed ? prisma_video_process_send_indexed(r) : prisma_video_process_send_bmp(r);
 }
 
 static esp_err_t video_dispatch_get(httpd_req_t *r)
@@ -83,15 +92,14 @@ static esp_err_t video_dispatch_get(httpd_req_t *r)
     if(!auth(r)) return ESP_OK;
     if(strncmp(r->uri, "/api/v1/process/test/video/prepare", 34)==0) return prepare_get(r);
     if(strncmp(r->uri, "/api/v1/process/test/video/status", 33)==0) return send_status(r);
-    if(strncmp(r->uri, "/api/v1/process/test/video/frame.bmp", 36)==0) return frame_get(r);
+    if(strncmp(r->uri, "/api/v1/process/test/video/frame.idx", 36)==0) return frame_get(r,true);
+    if(strncmp(r->uri, "/api/v1/process/test/video/frame.bmp", 36)==0) return frame_get(r,false);
     httpd_resp_set_status(r,"404 Not Found");
     return httpd_resp_sendstr(r,"unknown video test endpoint");
 }
 
 void prisma_video_process_register_routes(httpd_handle_t server)
 {
-    /* One wildcard handler keeps total HTTP routes at the validated CORE-4B capacity.
-       Video processing itself remains fully lazy until PREPARE is requested. */
     static const httpd_uri_t video={
         .uri="/api/v1/process/test/video/*",
         .method=HTTP_GET,
@@ -99,5 +107,5 @@ void prisma_video_process_register_routes(httpd_handle_t server)
     };
     esp_err_t e=httpd_register_uri_handler(server,&video);
     if(e!=ESP_OK) ESP_LOGE(TAG,"video wildcard route failed: %s",esp_err_to_name(e));
-    else ESP_LOGI(TAG,"CORE-4C VIDEO wildcard route ready (lazy)");
+    else ESP_LOGI(TAG,"CORE-4E adaptive VIDEO route ready (lazy)");
 }
