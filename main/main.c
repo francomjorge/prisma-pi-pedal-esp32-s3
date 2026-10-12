@@ -14,9 +14,10 @@ static const char *TAG = "PRISMA_PEDAL";
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "PRISMA-PI PEDAL CORE 0.1.0 / CORE-1");
-
+    /* Must be the first hardware action, matching the proven appliance firmware. */
     bool power_ok = prisma_power_hold_init();
+
+    ESP_LOGI(TAG, "PRISMA-PI PEDAL CORE 0.1.1 / CORE-1 BOOT FIX");
     ESP_LOGI(TAG, "POWER: %s", power_ok ? "READY" : "FAILED");
 
     bool display_ok = prisma_display_init();
