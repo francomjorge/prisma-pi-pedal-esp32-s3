@@ -4,6 +4,7 @@
 #include "storage.h"
 #include "image_ab.h"
 #include "video_ab.h"
+#include "discovery.h"
 
 #define synth_on prisma_shared_on
 #define mode_index prisma_shared_mode
@@ -41,6 +42,7 @@ void app_main(void)
     esp_err_t video_ab = prisma_video_ab_init();
     if (video_ab != ESP_OK) ESP_LOGW(SYNC_TAG, "VIDEO A/B unavailable: %s", esp_err_to_name(video_ab));
 
-    ESP_LOGI(SYNC_TAG, "CORE-1D IMAGE+VIDEO A/B ACTIVE - LEGACY UI PATH UNCHANGED");
+    prisma_discovery_start_task();
+    ESP_LOGI(SYNC_TAG, "CORE-2B mDNS discovery armed - validated Wi-Fi path unchanged");
     prisma_legacy_main();
 }
