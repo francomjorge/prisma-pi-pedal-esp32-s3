@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import sys
 
 FLASH_SIZE = 16 * 1024 * 1024
 PARTS = [
@@ -9,7 +8,8 @@ PARTS = [
     (0x020000, Path('build/prisma_pi_pedal_core1a.bin'), 'app'),
     (0x620000, Path('build/storage.bin'), 'storage'),
 ]
-OUT = Path('build/PRISMA-PI-PEDAL-CORE1A-16MB.bin')
+OUT_DIR = Path('dist')
+OUT = OUT_DIR / 'PRISMA-PI-PEDAL-CORE1A-16MB.bin'
 
 image = bytearray(b'\xff') * FLASH_SIZE
 for offset, path, name in PARTS:
@@ -22,6 +22,7 @@ for offset, path, name in PARTS:
     image[offset:end] = data
     print(f'{name:16s} 0x{offset:06x}-0x{end-1:06x} {len(data)} bytes')
 
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 OUT.write_bytes(image)
 if OUT.stat().st_size != FLASH_SIZE:
     raise SystemExit('factory size mismatch')
