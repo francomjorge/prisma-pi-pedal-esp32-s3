@@ -14,10 +14,7 @@ static const char *TAG = "PRISMA_PROCESS_API";
 extern const uint8_t web_process_html_start[] asm("_binary_process_html_start");
 extern const uint8_t web_process_html_end[] asm("_binary_process_html_end");
 
-static bool require_admin(httpd_req_t *r)
-{
-    return prisma_admin_authorize(r);
-}
+static bool require_admin(httpd_req_t *r){ return prisma_admin_authorize(r); }
 
 static esp_err_t process_page_get(httpd_req_t *r)
 {
@@ -33,7 +30,6 @@ static esp_err_t send_status_json(httpd_req_t *r)
     prisma_process_status_t s = {0};
     esp_err_t err = prisma_process_get_status(&s);
     if (err != ESP_OK) return err;
-
     cJSON *root = cJSON_CreateObject();
     if (!root) return ESP_ERR_NO_MEM;
     cJSON_AddBoolToObject(root, "ready", s.ready);
@@ -48,7 +44,6 @@ static esp_err_t send_status_json(httpd_req_t *r)
     cJSON_AddNumberToObject(root, "pixel_bytes", s.pixel_bytes);
     cJSON_AddNumberToObject(root, "free_psram", s.free_psram);
     cJSON_AddNumberToObject(root, "jpeg_scale_div", s.jpeg_scale_div);
-
     char *text = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     if (!text) return ESP_ERR_NO_MEM;
@@ -59,39 +54,29 @@ static esp_err_t send_status_json(httpd_req_t *r)
     return err;
 }
 
+static esp_err_t run_and_reply(httpd_req_t *r, esp_err_t (*fn)(void), const char *fallback)
+{
+    if (!require_admin(r)) return ESP_OK;
+    esp_err_t err = fn();
+    if (err == ESP_OK) return send_status_json(r);
+    prisma_process_status_t s = {0};
+    (void)prisma_process_get_status(&s);
+    if (err == ESP_ERR_NOT_FOUND) httpd_resp_set_status(r, "404 Not Found");
+    else if (err == ESP_ERR_INVALID_STATE) httpd_resp_set_status(r, "409 Conflict");
+    else if (err == ESP_ERR_NOT_SUPPORTED) httpd_resp_set_status(r, "415 Unsupported Media Type");
+    else httpd_resp_set_status(r, "500 Internal Server Error");
+    return httpd_resp_sendstr(r, s.error[0] ? s.error : fallback);
+}
+
+static esp_err_t poster_post(httpd_req_t *r){ return run_and_reply(r, prisma_process_run_poster, "poster processing failed"); }
+static esp_err_t lines_post(httpd_req_t *r){ return run_and_reply(r, prisma_process_run_lines, "line generation failed"); }
+static esp_err_t rectangles_post(httpd_req_t *r){ return run_and_reply(r, prisma_process_run_rectangles, "rectangle generation failed"); }
+static esp_err_t circles_post(httpd_req_t *r){ return run_and_reply(r, prisma_process_run_circles, "circle generation failed"); }
+static esp_err_t triangles_post(httpd_req_t *r){ return run_and_reply(r, prisma_process_run_triangles, "triangle generation failed"); }
+
 static esp_err_t status_get(httpd_req_t *r)
 {
     if (!require_admin(r)) return ESP_OK;
-    return send_status_json(r);
-}
-
-static esp_err_t poster_post(httpd_req_t *r)
-{
-    if (!require_admin(r)) return ESP_OK;
-    esp_err_t err = prisma_process_run_poster();
-    if (err != ESP_OK) {
-        prisma_process_status_t s = {0};
-        (void)prisma_process_get_status(&s);
-        if (err == ESP_ERR_NOT_FOUND) httpd_resp_set_status(r, "404 Not Found");
-        else if (err == ESP_ERR_INVALID_STATE) httpd_resp_set_status(r, "409 Conflict");
-        else if (err == ESP_ERR_NOT_SUPPORTED) httpd_resp_set_status(r, "415 Unsupported Media Type");
-        else httpd_resp_set_status(r, "500 Internal Server Error");
-        return httpd_resp_sendstr(r, s.error[0] ? s.error : "poster processing failed");
-    }
-    return send_status_json(r);
-}
-
-static esp_err_t lines_post(httpd_req_t *r)
-{
-    if (!require_admin(r)) return ESP_OK;
-    esp_err_t err = prisma_process_run_lines();
-    if (err != ESP_OK) {
-        if (err == ESP_ERR_INVALID_STATE) httpd_resp_set_status(r, "409 Conflict");
-        else httpd_resp_set_status(r, "500 Internal Server Error");
-        prisma_process_status_t s = {0};
-        (void)prisma_process_get_status(&s);
-        return httpd_resp_sendstr(r, s.error[0] ? s.error : "line generation failed");
-    }
     return send_status_json(r);
 }
 
@@ -109,35 +94,28 @@ static esp_err_t result_get(httpd_req_t *r)
 static void register_one(httpd_handle_t server, const httpd_uri_t *uri)
 {
     esp_err_t err = httpd_register_uri_handler(server, uri);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "route register failed %s method=%d: %s",
-                 uri->uri, (int)uri->method, esp_err_to_name(err));
-    }
+    if (err != ESP_OK) ESP_LOGE(TAG, "route register failed %s method=%d: %s", uri->uri, (int)uri->method, esp_err_to_name(err));
 }
 
 void prisma_process_register_routes(httpd_handle_t server)
 {
     (void)prisma_process_init();
-    static const httpd_uri_t page = {
-        .uri = "/admin/process", .method = HTTP_GET, .handler = process_page_get
-    };
-    static const httpd_uri_t poster = {
-        .uri = "/api/v1/process/test/poster", .method = HTTP_POST, .handler = poster_post
-    };
-    static const httpd_uri_t lines = {
-        .uri = "/api/v1/process/test/lines", .method = HTTP_POST, .handler = lines_post
-    };
-    static const httpd_uri_t status = {
-        .uri = "/api/v1/process/test/status", .method = HTTP_GET, .handler = status_get
-    };
-    static const httpd_uri_t result = {
-        .uri = "/api/v1/process/test/result.bmp", .method = HTTP_GET, .handler = result_get
-    };
+    static const httpd_uri_t page = {.uri="/admin/process", .method=HTTP_GET, .handler=process_page_get};
+    static const httpd_uri_t poster = {.uri="/api/v1/process/test/poster", .method=HTTP_POST, .handler=poster_post};
+    static const httpd_uri_t lines = {.uri="/api/v1/process/test/lines", .method=HTTP_POST, .handler=lines_post};
+    static const httpd_uri_t rectangles = {.uri="/api/v1/process/test/rectangles", .method=HTTP_POST, .handler=rectangles_post};
+    static const httpd_uri_t circles = {.uri="/api/v1/process/test/circles", .method=HTTP_POST, .handler=circles_post};
+    static const httpd_uri_t triangles = {.uri="/api/v1/process/test/triangles", .method=HTTP_POST, .handler=triangles_post};
+    static const httpd_uri_t status = {.uri="/api/v1/process/test/status", .method=HTTP_GET, .handler=status_get};
+    static const httpd_uri_t result = {.uri="/api/v1/process/test/result.bmp", .method=HTTP_GET, .handler=result_get};
 
     register_one(server, &page);
     register_one(server, &poster);
     register_one(server, &lines);
+    register_one(server, &rectangles);
+    register_one(server, &circles);
+    register_one(server, &triangles);
     register_one(server, &status);
     register_one(server, &result);
-    ESP_LOGI(TAG, "CORE-4A local processing routes ready at /admin/process");
+    ESP_LOGI(TAG, "CORE-4B local primitives ready at /admin/process");
 }
