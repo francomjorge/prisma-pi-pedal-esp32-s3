@@ -1,0 +1,61 @@
+name: CORE-4A local processing test
+
+on:
+  push:
+    branches: [core4a-local-processing]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify CORE-4A contract
+        run: |
+          grep -q 'espressif/esp_jpeg' main/idf_component.yml
+          grep -q 'prisma_process_run_poster' main/local_process.c
+          grep -q 'prisma_image_ab_read' main/local_process.c
+          grep -q 'esp_jpeg_decode' main/local_process.c
+          grep -q 'posterize_rgb565' main/local_process.c
+          grep -q 'prisma_process_run_lines' main/local_process.c
+          grep -q '"/admin/process"' main/process_api.c
+          grep -q '"/api/v1/process/test/poster"' main/process_api.c
+          grep -q '"/api/v1/process/test/lines"' main/process_api.c
+          grep -q '"/api/v1/process/test/result.bmp"' main/process_api.c
+          grep -q 'POSTERIZE ACTIVE IMAGE' main/web/process.html
+          grep -q 'GENERATE LINES' main/web/process.html
+          grep -q 'LOCAL PROCESSING' main/web/admin.html
+          grep -q 'prisma_process_register_routes' main/api_core3a.c
+          grep -q 'prisma_storage_verify_register_routes' main/api_core3a.c
+          grep -q 'BAT_POWER_PIN 2' main/main.c
+          grep -q 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -q 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core4a_factory.py
+          test "$(stat -c%s dist/PRISMA-PI-PEDAL-CORE4A-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-PEDAL-CORE4A-16MB.bin > dist/PRISMA-PI-PEDAL-CORE4A-16MB.sha256
+
+      - name: Upload CORE-4A
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core4a
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-PEDAL-CORE4A-16MB.bin
+            dist/PRISMA-PI-PEDAL-CORE4A-16MB.sha256
+            build/prisma_pi_pedal_core4a.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/storage.bin
