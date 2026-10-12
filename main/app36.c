@@ -5,6 +5,7 @@
 #include "image_ab.h"
 #include "video_ab.h"
 #include "discovery.h"
+#include "discovery_udp.h"
 
 #define synth_on prisma_shared_on
 #define mode_index prisma_shared_mode
@@ -43,6 +44,7 @@ void app_main(void)
     if (video_ab != ESP_OK) ESP_LOGW(SYNC_TAG, "VIDEO A/B unavailable: %s", esp_err_to_name(video_ab));
 
     prisma_discovery_start_task();
-    ESP_LOGI(SYNC_TAG, "CORE-2B mDNS discovery armed - validated Wi-Fi path unchanged");
+    prisma_udp_discovery_start_task();
+    ESP_LOGI(SYNC_TAG, "CORE-2 discovery armed: mDNS + UDP fallback");
     prisma_legacy_main();
 }
