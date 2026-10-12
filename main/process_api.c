@@ -5,6 +5,7 @@
 #include "admin_auth.h"
 #include "cJSON.h"
 #include "local_process.h"
+#include "video_process_api.h"
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -117,5 +118,6 @@ void prisma_process_register_routes(httpd_handle_t server)
     register_one(server, &triangles);
     register_one(server, &status);
     register_one(server, &result);
-    ESP_LOGI(TAG, "CORE-4B local primitives ready at /admin/process");
+    prisma_video_process_register_routes(server);
+    ESP_LOGI(TAG, "CORE-4C local image + primitive + VIDEO processing ready at /admin/process");
 }
