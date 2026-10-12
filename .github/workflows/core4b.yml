@@ -1,0 +1,57 @@
+name: CORE-4B local primitives test
+
+on:
+  push:
+    branches: [core4b-primitives]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify CORE-4B contract
+        run: |
+          grep -q '^CONFIG_SPIRAM=y' sdkconfig
+          grep -q '^CONFIG_SPIRAM_MODE_OCT=y' sdkconfig
+          grep -q '^CONFIG_SPIRAM_BOOT_INIT=y' sdkconfig
+          grep -q '^CONFIG_SPIRAM_USE_MALLOC=y' sdkconfig
+          grep -q 'prisma_process_run_rectangles' main/local_process.c
+          grep -q 'prisma_process_run_circles' main/local_process.c
+          grep -q 'prisma_process_run_triangles' main/local_process.c
+          grep -q '"/api/v1/process/test/rectangles"' main/process_api.c
+          grep -q '"/api/v1/process/test/circles"' main/process_api.c
+          grep -q '"/api/v1/process/test/triangles"' main/process_api.c
+          grep -q '>RECTANGLES<' main/web/process.html
+          grep -q '>CIRCLES<' main/web/process.html
+          grep -q '>TRIANGLES<' main/web/process.html
+          grep -q 'BAT_POWER_PIN 2' main/main.c
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core4b_factory.py
+          test "$(stat -c%s dist/PRISMA-PI-PEDAL-CORE4B-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-PEDAL-CORE4B-16MB.bin > dist/PRISMA-PI-PEDAL-CORE4B-16MB.sha256
+
+      - name: Upload CORE-4B
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core4b
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-PEDAL-CORE4B-16MB.bin
+            dist/PRISMA-PI-PEDAL-CORE4B-16MB.sha256
+            build/prisma_pi_pedal_core4b.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/storage.bin
