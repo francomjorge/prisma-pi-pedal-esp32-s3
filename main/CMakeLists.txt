@@ -1,7 +1,7 @@
 idf_component_register(
-    SRCS "app36.c" "wifi_portal.c" "prisma_touch.c" "storage.c"
+    SRCS "app36.c" "wifi_portal.c" "prisma_touch.c" "storage.c" "image_ab.c"
     INCLUDE_DIRS "."
-    REQUIRES esp_wifi esp_event esp_netif nvs_flash esp_http_server esp_driver_gpio esp_driver_spi esp_driver_i2c esp_lcd spiffs json
+    REQUIRES esp_wifi esp_event esp_netif nvs_flash esp_http_server esp_driver_gpio esp_driver_spi esp_driver_i2c esp_lcd esp_partition spiffs json
     EMBED_TXTFILES "web/index.html" "web/style.css"
 )
 
