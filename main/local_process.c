@@ -13,7 +13,8 @@
 
 #include "image_ab.h"
 
-#define PROCESS_MAX_PIXELS_BYTES (512u * 1024u)
+#define PROCESS_TARGET_LONG_SIDE 800u
+#define PROCESS_PSRAM_RESERVE (2u * 1024u * 1024u)
 #define TEST_W 240
 #define TEST_H 240
 
@@ -21,6 +22,7 @@ static const char *TAG = "PRISMA_PROCESS";
 
 static SemaphoreHandle_t g_lock;
 static uint16_t *g_pixels;
+static bool g_poster_palette;
 static prisma_process_status_t g_status;
 
 static void *psram_alloc(size_t bytes)
@@ -35,8 +37,13 @@ static void status_error(const char *test, const char *message)
     if (!g_lock) return;
     xSemaphoreTake(g_lock, portMAX_DELAY);
     g_status.busy = false;
+    g_status.valid = false;
+    g_status.width = 0;
+    g_status.height = 0;
+    g_status.pixel_bytes = 0;
     if (test) strlcpy(g_status.last_test, test, sizeof(g_status.last_test));
     strlcpy(g_status.error, message ? message : "processing failed", sizeof(g_status.error));
+    g_status.free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     xSemaphoreGive(g_lock);
 }
 
@@ -61,6 +68,7 @@ static void commit_result(const char *name, uint16_t *pixels, uint16_t width, ui
     xSemaphoreTake(g_lock, portMAX_DELAY);
     uint16_t *old = g_pixels;
     g_pixels = pixels;
+    g_poster_palette = strcmp(name, "poster") == 0;
     memset(&g_status, 0, sizeof(g_status));
     g_status.ready = true;
     g_status.valid = true;
@@ -90,11 +98,15 @@ esp_err_t prisma_process_init(void)
 static uint8_t choose_scale_div(uint16_t width, uint16_t height)
 {
     const uint8_t divs[] = {1, 2, 4, 8};
+    size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t budget = free_psram > PROCESS_PSRAM_RESERVE ? free_psram - PROCESS_PSRAM_RESERVE : 0;
     for (size_t i = 0; i < sizeof(divs); ++i) {
-        uint32_t w = width / divs[i];
-        uint32_t h = height / divs[i];
+        uint8_t div = divs[i];
+        uint32_t w = width / div;
+        uint32_t h = height / div;
         size_t bytes = (size_t)w * h * sizeof(uint16_t);
-        if (w > 0 && h > 0 && w <= 480 && h <= 480 && bytes <= PROCESS_MAX_PIXELS_BYTES) return divs[i];
+        uint32_t long_side = w > h ? w : h;
+        if (w && h && long_side <= PROCESS_TARGET_LONG_SIDE && bytes <= budget) return div;
     }
     return 0;
 }
@@ -134,18 +146,38 @@ static bool jpeg_baseline_size(const uint8_t *buf, size_t len, uint16_t *width, 
     return false;
 }
 
-static uint16_t posterize_rgb565(uint16_t c)
+static inline uint8_t level5(uint16_t v)
 {
-    uint16_t r = (c >> 11) & 0x1F;
-    uint16_t g = (c >> 5) & 0x3F;
-    uint16_t b = c & 0x1F;
-    uint16_t rl = (uint16_t)((r * 3u + 15u) / 31u);
-    uint16_t gl = (uint16_t)((g * 3u + 31u) / 63u);
-    uint16_t bl = (uint16_t)((b * 3u + 15u) / 31u);
-    r = (uint16_t)((rl * 31u + 1u) / 3u);
-    g = (uint16_t)(gl * 21u);
-    b = (uint16_t)((bl * 31u + 1u) / 3u);
-    return (uint16_t)((r << 11) | (g << 5) | b);
+    if (v <= 5) return 0;
+    if (v <= 15) return 1;
+    if (v <= 25) return 2;
+    return 3;
+}
+
+static inline uint8_t level6(uint16_t v)
+{
+    if (v <= 10) return 0;
+    if (v <= 31) return 1;
+    if (v <= 52) return 2;
+    return 3;
+}
+
+static inline uint16_t posterize_rgb565(uint16_t c)
+{
+    static const uint16_t r5[4] = {0, 10, 21, 31};
+    static const uint16_t g6[4] = {0, 21, 42, 63};
+    uint8_t rl = level5((c >> 11) & 0x1F);
+    uint8_t gl = level6((c >> 5) & 0x3F);
+    uint8_t bl = level5(c & 0x1F);
+    return (uint16_t)((r5[rl] << 11) | (g6[gl] << 5) | r5[bl]);
+}
+
+static inline uint8_t poster_index(uint16_t c)
+{
+    uint8_t rl = level5((c >> 11) & 0x1F);
+    uint8_t gl = level6((c >> 5) & 0x3F);
+    uint8_t bl = level5(c & 0x1F);
+    return (uint8_t)((rl << 4) | (gl << 2) | bl);
 }
 
 esp_err_t prisma_process_run_poster(void)
@@ -180,7 +212,7 @@ esp_err_t prisma_process_run_poster(void)
     uint8_t div = choose_scale_div(src_w, src_h);
     if (!div) {
         free(jpeg);
-        status_error("poster", "decoded IMAGE is too large for smoke-test buffer");
+        status_error("poster", "decoded IMAGE exceeds adaptive PSRAM budget");
         return ESP_ERR_NO_MEM;
     }
 
@@ -216,7 +248,7 @@ esp_err_t prisma_process_run_poster(void)
     for (size_t i = 0; i < count; ++i) pixels[i] = posterize_rgb565(pixels[i]);
     uint32_t elapsed = (uint32_t)((esp_timer_get_time() - started) / 1000);
     commit_result("poster", pixels, decoded.width, decoded.height, elapsed, info.generation, div);
-    ESP_LOGI(TAG, "POSTER local source_gen=%lu %ux%u div=%u %lums",
+    ESP_LOGI(TAG, "POSTER adaptive source_gen=%lu %ux%u div=%u %lums",
              (unsigned long)info.generation, decoded.width, decoded.height, div, (unsigned long)elapsed);
     return ESP_OK;
 }
@@ -377,6 +409,39 @@ static void le32(uint8_t *p, uint32_t v)
     p[3] = (uint8_t)(v >> 24);
 }
 
+static esp_err_t send_poster8_bmp(httpd_req_t *req, uint16_t w, uint16_t h)
+{
+    const uint32_t palette_bytes = 64u * 4u;
+    const uint32_t pixel_offset = 54u + palette_bytes;
+    const uint32_t row_bytes = ((uint32_t)w + 3u) & ~3u;
+    const uint32_t image_bytes = row_bytes * h;
+    const uint32_t file_bytes = pixel_offset + image_bytes;
+    uint8_t header[54] = {0};
+    header[0]='B'; header[1]='M';
+    le32(&header[2],file_bytes); le32(&header[10],pixel_offset); le32(&header[14],40);
+    le32(&header[18],w); le32(&header[22],h); le16(&header[26],1); le16(&header[28],8);
+    le32(&header[34],image_bytes); le32(&header[46],64); le32(&header[50],64);
+
+    static const uint8_t rb[4]={0,82,173,255};
+    static const uint8_t gg[4]={0,85,170,255};
+    uint8_t palette[64*4];
+    for(int i=0;i<64;i++){
+        uint8_t rl=(i>>4)&3, gl=(i>>2)&3, bl=i&3;
+        palette[i*4+0]=rb[bl]; palette[i*4+1]=gg[gl]; palette[i*4+2]=rb[rl]; palette[i*4+3]=0;
+    }
+    uint8_t *row=malloc(row_bytes);
+    if(!row) return ESP_ERR_NO_MEM;
+    esp_err_t err=httpd_resp_send_chunk(req,(const char*)header,sizeof(header));
+    if(err==ESP_OK) err=httpd_resp_send_chunk(req,(const char*)palette,sizeof(palette));
+    for(int y=h-1;err==ESP_OK && y>=0;--y){
+        memset(row,0,row_bytes);
+        for(uint16_t x=0;x<w;x++) row[x]=poster_index(g_pixels[(size_t)y*w+x]);
+        err=httpd_resp_send_chunk(req,(const char*)row,row_bytes);
+    }
+    free(row);
+    return err;
+}
+
 esp_err_t prisma_process_send_bmp(httpd_req_t *req)
 {
     if (!req) return ESP_ERR_INVALID_ARG;
@@ -390,45 +455,37 @@ esp_err_t prisma_process_send_bmp(httpd_req_t *req)
 
     const uint16_t w = g_status.width;
     const uint16_t h = g_status.height;
-    const uint32_t row_bytes = ((uint32_t)w * 3u + 3u) & ~3u;
-    const uint32_t image_bytes = row_bytes * h;
-    const uint32_t file_bytes = 54u + image_bytes;
-
-    uint8_t header[54] = {0};
-    header[0] = 'B'; header[1] = 'M';
-    le32(&header[2], file_bytes);
-    le32(&header[10], 54);
-    le32(&header[14], 40);
-    le32(&header[18], w);
-    le32(&header[22], h);
-    le16(&header[26], 1);
-    le16(&header[28], 24);
-    le32(&header[34], image_bytes);
-
-    uint8_t *row = malloc(row_bytes);
-    if (!row) {
-        xSemaphoreGive(g_lock);
-        return ESP_ERR_NO_MEM;
-    }
-
     httpd_resp_set_type(req, "image/bmp");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=prisma-process.bmp");
-    esp_err_t err = httpd_resp_send_chunk(req, (const char *)header, sizeof(header));
-    for (int y = h - 1; err == ESP_OK && y >= 0; --y) {
-        memset(row, 0, row_bytes);
-        for (uint16_t x = 0; x < w; ++x) {
-            uint16_t c = g_pixels[(size_t)y * w + x];
-            uint8_t r = (uint8_t)(((c >> 11) & 0x1F) * 255u / 31u);
-            uint8_t g = (uint8_t)(((c >> 5) & 0x3F) * 255u / 63u);
-            uint8_t b = (uint8_t)((c & 0x1F) * 255u / 31u);
-            row[x * 3u + 0] = b;
-            row[x * 3u + 1] = g;
-            row[x * 3u + 2] = r;
+
+    esp_err_t err;
+    if (g_poster_palette) {
+        err = send_poster8_bmp(req, w, h);
+    } else {
+        const uint32_t row_bytes = ((uint32_t)w * 3u + 3u) & ~3u;
+        const uint32_t image_bytes = row_bytes * h;
+        const uint32_t file_bytes = 54u + image_bytes;
+        uint8_t header[54] = {0};
+        header[0] = 'B'; header[1] = 'M';
+        le32(&header[2], file_bytes); le32(&header[10], 54); le32(&header[14], 40);
+        le32(&header[18], w); le32(&header[22], h); le16(&header[26], 1); le16(&header[28], 24);
+        le32(&header[34], image_bytes);
+        uint8_t *row = malloc(row_bytes);
+        if (!row) { xSemaphoreGive(g_lock); return ESP_ERR_NO_MEM; }
+        err = httpd_resp_send_chunk(req, (const char *)header, sizeof(header));
+        for (int y = h - 1; err == ESP_OK && y >= 0; --y) {
+            memset(row, 0, row_bytes);
+            for (uint16_t x = 0; x < w; ++x) {
+                uint16_t c = g_pixels[(size_t)y * w + x];
+                row[x * 3u + 0] = (uint8_t)((c & 0x1F) * 255u / 31u);
+                row[x * 3u + 1] = (uint8_t)(((c >> 5) & 0x3F) * 255u / 63u);
+                row[x * 3u + 2] = (uint8_t)(((c >> 11) & 0x1F) * 255u / 31u);
+            }
+            err = httpd_resp_send_chunk(req, (const char *)row, row_bytes);
         }
-        err = httpd_resp_send_chunk(req, (const char *)row, row_bytes);
+        free(row);
     }
-    free(row);
     if (err == ESP_OK) err = httpd_resp_send_chunk(req, NULL, 0);
     xSemaphoreGive(g_lock);
     return err;
