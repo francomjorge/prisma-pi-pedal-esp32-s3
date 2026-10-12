@@ -22,17 +22,17 @@ jobs:
 
       - name: Verify CORE-4D contract
         run: |
-          grep -q 'CONFIG_SPIRAM=y' sdkconfig
-          grep -q 'CONFIG_SPIRAM_MODE_OCT=y' sdkconfig
-          grep -q 'index_video_from_flash' main/video_process.c
-          grep -q 'SCAN_CHUNK_BYTES' main/video_process.c
-          grep -q 'prisma_video_ab_read(base, chunk, len)' main/video_process.c
-          grep -q 'prisma_video_ab_read(ref->offset, jpeg, ref->length)' main/video_process.c
-          grep -q 'esp_jpeg_decode' main/video_process.c
-          grep -q 'posterize_rgb565' main/video_process.c
-          grep -q 'CORE-4C VIDEO routes registered lazy' main/video_process_api.c
-          grep -q 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
-          grep -q 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
+          grep -Fq 'CONFIG_SPIRAM=y' sdkconfig
+          grep -Fq 'CONFIG_SPIRAM_MODE_OCT=y' sdkconfig
+          grep -Fq 'index_video_from_flash' main/video_process.c
+          grep -Fq 'SCAN_CHUNK_BYTES' main/video_process.c
+          grep -Fq 'prisma_video_ab_read(base, chunk, len)' main/video_process.c
+          grep -Fq 'prisma_video_ab_read(ref->offset, jpeg, ref->length)' main/video_process.c
+          grep -Fq 'esp_jpeg_decode' main/video_process.c
+          grep -Fq 'posterize_rgb565' main/video_process.c
+          grep -Fq 'VIDEO routes registered lazy' main/video_process_api.c
+          grep -Fq 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -Fq 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
 
       - name: Create deterministic 16 MB factory
         run: |
