@@ -30,7 +30,7 @@ jobs:
           grep -Fq 'prisma_video_ab_read(ref->offset, jpeg, ref->length)' main/video_process.c
           grep -Fq 'esp_jpeg_decode' main/video_process.c
           grep -Fq 'posterize_rgb565' main/video_process.c
-          grep -Fq 'VIDEO routes registered lazy' main/video_process_api.c
+          grep -Fq 'CORE-4C VIDEO wildcard route ready (lazy)' main/video_process_api.c
           grep -Fq 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
           grep -Fq 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
 
