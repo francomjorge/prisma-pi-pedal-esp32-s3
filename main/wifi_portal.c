@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <stdint.h>
 #include "wifi_portal.h"
+#include "image_ab.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -65,14 +66,163 @@ static esp_err_t source_get(httpd_req_t*r)
     httpd_resp_set_type(r,"image/jpeg");no_cache(r);char buf[1024];size_t got;esp_err_t err=ESP_OK;while((got=fread(buf,1,sizeof(buf),f))>0){err=httpd_resp_send_chunk(r,buf,got);if(err!=ESP_OK)break;}fclose(f);if(err==ESP_OK)err=httpd_resp_send_chunk(r,NULL,0);return err;
 }
 
+static esp_err_t image_info_get(httpd_req_t *r)
+{
+    prisma_image_info_t info;
+    esp_err_t err = prisma_image_ab_get_info(&info);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE A/B unavailable");
+        return err;
+    }
+    char b[192];
+    int n = snprintf(b, sizeof(b),
+                     "{\"ready\":%s,\"valid\":%s,\"active_bank\":\"%c\",\"generation\":%lu,\"size\":%u,\"crc32\":\"%08lx\"}",
+                     info.ready ? "true" : "false",
+                     info.valid ? "true" : "false",
+                     info.active_bank,
+                     (unsigned long)info.generation,
+                     (unsigned)info.size,
+                     (unsigned long)info.crc32);
+    if (n < 0 || n >= (int)sizeof(b)) return ESP_FAIL;
+    httpd_resp_set_type(r, "application/json");
+    no_cache(r);
+    return httpd_resp_send(r, b, n);
+}
+
+static esp_err_t image_put(httpd_req_t *r)
+{
+    size_t total = (size_t)r->content_len;
+    if (total < 4 || total > PRISMA_IMAGE_MAX_BYTES) {
+        httpd_resp_set_status(r, "413 Payload Too Large");
+        return httpd_resp_send(r, "IMAGE must be JPEG <= 1 MB", HTTPD_RESP_USE_STRLEN);
+    }
+
+    esp_err_t err = prisma_image_ab_begin(total);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "Cannot start IMAGE upload");
+        return err;
+    }
+
+    uint8_t buf[1024];
+    size_t offset = 0;
+    uint8_t first0 = 0, first1 = 0, last0 = 0, last1 = 0;
+    while (offset < total) {
+        size_t want = total - offset;
+        if (want > sizeof(buf)) want = sizeof(buf);
+        int got = httpd_req_recv(r, (char *)buf, want);
+        if (got == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (got <= 0) {
+            prisma_image_ab_abort();
+            httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE upload interrupted");
+            return ESP_FAIL;
+        }
+
+        for (int i = 0; i < got; ++i) {
+            size_t pos = offset + (size_t)i;
+            if (pos == 0) first0 = buf[i];
+            if (pos == 1) first1 = buf[i];
+            last0 = last1;
+            last1 = buf[i];
+        }
+
+        err = prisma_image_ab_write(offset, buf, (size_t)got);
+        if (err != ESP_OK) {
+            prisma_image_ab_abort();
+            httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE flash write failed");
+            return err;
+        }
+        offset += (size_t)got;
+    }
+
+    if (first0 != 0xFF || first1 != 0xD8 || last0 != 0xFF || last1 != 0xD9) {
+        prisma_image_ab_abort();
+        httpd_resp_set_status(r, "415 Unsupported Media Type");
+        return httpd_resp_send(r, "Invalid JPEG markers; previous IMAGE remains active", HTTPD_RESP_USE_STRLEN);
+    }
+
+    err = prisma_image_ab_finalize();
+    if (err != ESP_OK) {
+        prisma_image_ab_abort();
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE commit failed");
+        return err;
+    }
+
+    prisma_image_info_t info;
+    if (prisma_image_ab_get_info(&info) != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE committed but status unavailable");
+        return ESP_FAIL;
+    }
+    char b[160];
+    int n = snprintf(b, sizeof(b),
+                     "{\"ok\":true,\"active_bank\":\"%c\",\"generation\":%lu,\"size\":%u,\"crc32\":\"%08lx\"}",
+                     info.active_bank,
+                     (unsigned long)info.generation,
+                     (unsigned)info.size,
+                     (unsigned long)info.crc32);
+    httpd_resp_set_type(r, "application/json");
+    no_cache(r);
+    return httpd_resp_send(r, b, n);
+}
+
+static esp_err_t image_get(httpd_req_t *r)
+{
+    prisma_image_info_t info;
+    esp_err_t err = prisma_image_ab_get_info(&info);
+    if (err != ESP_OK || !info.valid) {
+        httpd_resp_send_err(r, HTTPD_404_NOT_FOUND, "No active IMAGE");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(r, "image/jpeg");
+    no_cache(r);
+    uint8_t buf[1024];
+    size_t offset = 0;
+    while (offset < info.size) {
+        size_t take = info.size - offset;
+        if (take > sizeof(buf)) take = sizeof(buf);
+        err = prisma_image_ab_read(offset, buf, take);
+        if (err != ESP_OK) {
+            httpd_resp_send_chunk(r, NULL, 0);
+            return err;
+        }
+        err = httpd_resp_send_chunk(r, (const char *)buf, take);
+        if (err != ESP_OK) return err;
+        offset += take;
+    }
+    return httpd_resp_send_chunk(r, NULL, 0);
+}
+
+static esp_err_t image_delete(httpd_req_t *r)
+{
+    esp_err_t err = prisma_image_ab_delete();
+    if (err != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "IMAGE delete failed");
+        return err;
+    }
+    httpd_resp_set_type(r, "application/json");
+    no_cache(r);
+    return httpd_resp_send(r, "{\"ok\":true,\"valid\":false}", HTTPD_RESP_USE_STRLEN);
+}
+
 static void start_portal(void)
 {
     uint8_t mac[6];esp_read_mac(mac,ESP_MAC_WIFI_SOFTAP);char ap[32];snprintf(ap,sizeof(ap),"PRISMA-PI-%02X%02X",mac[4],mac[5]);
     wifi_config_t cfg={0};strlcpy((char*)cfg.ap.ssid,ap,sizeof(cfg.ap.ssid));cfg.ap.ssid_len=strlen(ap);cfg.ap.max_connection=4;cfg.ap.authmode=WIFI_AUTH_OPEN;
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP,&cfg));ESP_ERROR_CHECK(esp_wifi_start());
-    httpd_config_t hc=HTTPD_DEFAULT_CONFIG();hc.uri_match_fn=httpd_uri_match_wildcard;hc.lru_purge_enable=true;httpd_handle_t s=NULL;
-    if(httpd_start(&s,&hc)==ESP_OK){httpd_uri_t a={.uri="/",.method=HTTP_GET,.handler=page_get};httpd_uri_t b={.uri="/api/state",.method=HTTP_GET,.handler=state_get};httpd_uri_t c={.uri="/style.css",.method=HTTP_GET,.handler=css_get};httpd_uri_t d={.uri="/source/*",.method=HTTP_GET,.handler=source_get};httpd_register_uri_handler(s,&a);httpd_register_uri_handler(s,&b);httpd_register_uri_handler(s,&c);httpd_register_uri_handler(s,&d);}
-    ESP_LOGI(TAG,"PRISMA LITE M4.9 Global Web Sync: %s - http://192.168.4.1",ap);
+    httpd_config_t hc=HTTPD_DEFAULT_CONFIG();hc.uri_match_fn=httpd_uri_match_wildcard;hc.lru_purge_enable=true;hc.max_uri_handlers=12;httpd_handle_t s=NULL;
+    if(httpd_start(&s,&hc)==ESP_OK){
+        httpd_uri_t a={.uri="/",.method=HTTP_GET,.handler=page_get};
+        httpd_uri_t b={.uri="/api/state",.method=HTTP_GET,.handler=state_get};
+        httpd_uri_t c={.uri="/style.css",.method=HTTP_GET,.handler=css_get};
+        httpd_uri_t d={.uri="/source/*",.method=HTTP_GET,.handler=source_get};
+        httpd_uri_t e={.uri="/api/v1/image/info",.method=HTTP_GET,.handler=image_info_get};
+        httpd_uri_t f={.uri="/api/v1/image",.method=HTTP_PUT,.handler=image_put};
+        httpd_uri_t g={.uri="/api/v1/image",.method=HTTP_GET,.handler=image_get};
+        httpd_uri_t h={.uri="/api/v1/image",.method=HTTP_DELETE,.handler=image_delete};
+        httpd_register_uri_handler(s,&a);httpd_register_uri_handler(s,&b);httpd_register_uri_handler(s,&c);httpd_register_uri_handler(s,&d);
+        httpd_register_uri_handler(s,&e);httpd_register_uri_handler(s,&f);httpd_register_uri_handler(s,&g);httpd_register_uri_handler(s,&h);
+    }
+    ESP_LOGI(TAG,"PRISMA PEDAL CORE-1C IMAGE API: %s - http://192.168.4.1",ap);
 }
 
 void prisma_wifi_start(void)
