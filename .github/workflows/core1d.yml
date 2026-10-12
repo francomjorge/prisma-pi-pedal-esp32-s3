@@ -1,0 +1,53 @@
+name: CORE-1D IMAGE+VIDEO A-B test
+
+on:
+  push:
+    branches: [core1d-video-ab]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify media layout and API contract
+        run: |
+          grep -q 'image_a,  data, 0x40,    0x620000,  0x100000' partitions.csv
+          grep -q 'image_b,  data, 0x41,    0x720000,  0x100000' partitions.csv
+          grep -q 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -q 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
+          grep -q '"/api/v1/image/info"' main/wifi_portal.c
+          grep -q '"/api/v1/video/info"' main/wifi_portal.c
+          grep -q 'PRISMA_VIDEO_MAX_BYTES' main/wifi_portal.c
+          grep -q 'prisma_video_ab_abort' main/wifi_portal.c
+          grep -q '"prisma_vid"' main/video_ab.c
+          grep -q 'previous bank remains active' main/video_ab.c
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core1d_factory.py
+          test "$(stat -c%s dist/PRISMA-PI-PEDAL-CORE1D-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-PEDAL-CORE1D-16MB.bin > dist/PRISMA-PI-PEDAL-CORE1D-16MB.sha256
+
+      - name: Upload CORE-1D
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core1d
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-PEDAL-CORE1D-16MB.bin
+            dist/PRISMA-PI-PEDAL-CORE1D-16MB.sha256
+            build/prisma_pi_pedal_core1d.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/storage.bin
