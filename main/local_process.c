@@ -14,8 +14,8 @@
 #include "image_ab.h"
 
 #define PROCESS_MAX_PIXELS_BYTES (512u * 1024u)
-#define LINE_W 240
-#define LINE_H 240
+#define TEST_W 240
+#define TEST_H 240
 
 static const char *TAG = "PRISMA_PROCESS";
 
@@ -94,9 +94,7 @@ static uint8_t choose_scale_div(uint16_t width, uint16_t height)
         uint32_t w = width / divs[i];
         uint32_t h = height / divs[i];
         size_t bytes = (size_t)w * h * sizeof(uint16_t);
-        if (w > 0 && h > 0 && w <= 480 && h <= 480 && bytes <= PROCESS_MAX_PIXELS_BYTES) {
-            return divs[i];
-        }
+        if (w > 0 && h > 0 && w <= 480 && h <= 480 && bytes <= PROCESS_MAX_PIXELS_BYTES) return divs[i];
     }
     return 0;
 }
@@ -130,7 +128,7 @@ static bool jpeg_baseline_size(const uint8_t *buf, size_t len, uint16_t *width, 
             *width = ((uint16_t)buf[p + 5] << 8) | buf[p + 6];
             return *width > 0 && *height > 0;
         }
-        if (marker == 0xC2) return false; /* progressive JPEG: intentionally rejected */
+        if (marker == 0xC2) return false;
         p += seglen;
     }
     return false;
@@ -154,7 +152,6 @@ esp_err_t prisma_process_run_poster(void)
 {
     if (!begin_test("poster")) return ESP_ERR_INVALID_STATE;
     int64_t started = esp_timer_get_time();
-
     prisma_image_info_t info = {0};
     if (prisma_image_ab_get_info(&info) != ESP_OK || !info.valid || info.size == 0) {
         status_error("poster", "no active IMAGE in A/B storage");
@@ -204,9 +201,7 @@ esp_err_t prisma_process_run_poster(void)
         .outbuf_size = out_bytes,
         .out_format = JPEG_IMAGE_FORMAT_RGB565,
         .out_scale = scale_enum(div),
-        .flags = {
-            .swap_color_bytes = 0,
-        },
+        .flags = {.swap_color_bytes = 0},
     };
     esp_jpeg_image_output_t decoded = {0};
     err = esp_jpeg_decode(&cfg, &decoded);
@@ -219,7 +214,6 @@ esp_err_t prisma_process_run_poster(void)
 
     size_t count = (size_t)decoded.width * decoded.height;
     for (size_t i = 0; i < count; ++i) pixels[i] = posterize_rgb565(pixels[i]);
-
     uint32_t elapsed = (uint32_t)((esp_timer_get_time() - started) / 1000);
     commit_result("poster", pixels, decoded.width, decoded.height, elapsed, info.generation, div);
     ESP_LOGI(TAG, "POSTER local source_gen=%lu %ux%u div=%u %lums",
@@ -230,6 +224,19 @@ esp_err_t prisma_process_run_poster(void)
 static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
 {
     return (uint16_t)(((uint16_t)(r & 0xF8) << 8) | ((uint16_t)(g & 0xFC) << 3) | (b >> 3));
+}
+
+static uint16_t *new_test_canvas(const char *name)
+{
+    size_t bytes = TEST_W * TEST_H * sizeof(uint16_t);
+    uint16_t *pixels = psram_alloc(bytes);
+    if (!pixels) {
+        status_error(name, "not enough RAM/PSRAM for primitive buffer");
+        return NULL;
+    }
+    uint16_t bg = rgb565(4, 7, 12);
+    for (size_t i = 0; i < TEST_W * TEST_H; ++i) pixels[i] = bg;
+    return pixels;
 }
 
 static void draw_line(uint16_t *px, int w, int h, int x0, int y0, int x1, int y1, uint16_t color)
@@ -246,34 +253,102 @@ static void draw_line(uint16_t *px, int w, int h, int x0, int y0, int x1, int y1
     }
 }
 
+static void draw_rect(uint16_t *px, int x, int y, int w, int h, uint16_t c)
+{
+    draw_line(px, TEST_W, TEST_H, x, y, x + w, y, c);
+    draw_line(px, TEST_W, TEST_H, x + w, y, x + w, y + h, c);
+    draw_line(px, TEST_W, TEST_H, x + w, y + h, x, y + h, c);
+    draw_line(px, TEST_W, TEST_H, x, y + h, x, y, c);
+}
+
+static void plot8(uint16_t *px, int cx, int cy, int x, int y, uint16_t c)
+{
+    int pts[8][2] = {{cx+x,cy+y},{cx-x,cy+y},{cx+x,cy-y},{cx-x,cy-y},{cx+y,cy+x},{cx-y,cy+x},{cx+y,cy-x},{cx-y,cy-x}};
+    for (int i=0;i<8;i++) if ((unsigned)pts[i][0] < TEST_W && (unsigned)pts[i][1] < TEST_H) px[pts[i][1]*TEST_W+pts[i][0]]=c;
+}
+
+static void draw_circle(uint16_t *px, int cx, int cy, int r, uint16_t c)
+{
+    int x = r, y = 0, err = 1 - r;
+    while (x >= y) {
+        plot8(px, cx, cy, x, y, c);
+        y++;
+        if (err < 0) err += 2*y + 1;
+        else { x--; err += 2*(y-x) + 1; }
+    }
+}
+
+static void finish_generated(const char *name, uint16_t *pixels, int64_t started)
+{
+    uint32_t elapsed = (uint32_t)((esp_timer_get_time() - started) / 1000);
+    commit_result(name, pixels, TEST_W, TEST_H, elapsed, 0, 1);
+    ESP_LOGI(TAG, "%s local %dx%d %lums", name, TEST_W, TEST_H, (unsigned long)elapsed);
+}
+
 esp_err_t prisma_process_run_lines(void)
 {
     if (!begin_test("lines")) return ESP_ERR_INVALID_STATE;
     int64_t started = esp_timer_get_time();
-    size_t bytes = LINE_W * LINE_H * sizeof(uint16_t);
-    uint16_t *pixels = psram_alloc(bytes);
-    if (!pixels) {
-        status_error("lines", "not enough RAM/PSRAM for line buffer");
-        return ESP_ERR_NO_MEM;
-    }
-
-    uint16_t bg = rgb565(4, 7, 12);
-    uint16_t c1 = rgb565(40, 215, 215);
-    uint16_t c2 = rgb565(240, 245, 250);
-    for (size_t i = 0; i < LINE_W * LINE_H; ++i) pixels[i] = bg;
-
+    uint16_t *pixels = new_test_canvas("lines");
+    if (!pixels) return ESP_ERR_NO_MEM;
+    uint16_t c1 = rgb565(40, 215, 215), c2 = rgb565(240, 245, 250);
     for (int i = 0; i < 18; ++i) {
         int y = 8 + i * 13;
-        draw_line(pixels, LINE_W, LINE_H, 8, y, LINE_W - 9, LINE_H - 1 - y, (i & 1) ? c1 : c2);
+        draw_line(pixels, TEST_W, TEST_H, 8, y, TEST_W - 9, TEST_H - 1 - y, (i & 1) ? c1 : c2);
     }
     for (int i = 0; i < 8; ++i) {
         int x = 18 + i * 29;
-        draw_line(pixels, LINE_W, LINE_H, x, 8, LINE_W - 1 - x, LINE_H - 9, c1);
+        draw_line(pixels, TEST_W, TEST_H, x, 8, TEST_W - 1 - x, TEST_H - 9, c1);
     }
+    finish_generated("lines", pixels, started);
+    return ESP_OK;
+}
 
-    uint32_t elapsed = (uint32_t)((esp_timer_get_time() - started) / 1000);
-    commit_result("lines", pixels, LINE_W, LINE_H, elapsed, 0, 1);
-    ESP_LOGI(TAG, "LINES local %dx%d %lums", LINE_W, LINE_H, (unsigned long)elapsed);
+esp_err_t prisma_process_run_rectangles(void)
+{
+    if (!begin_test("rectangles")) return ESP_ERR_INVALID_STATE;
+    int64_t started = esp_timer_get_time();
+    uint16_t *pixels = new_test_canvas("rectangles");
+    if (!pixels) return ESP_ERR_NO_MEM;
+    uint16_t c1 = rgb565(40, 215, 215), c2 = rgb565(240, 245, 250);
+    for (int i=0;i<9;i++) {
+        int inset = 10 + i*10;
+        draw_rect(pixels, inset, inset, TEST_W-1-2*inset, TEST_H-1-2*inset, (i&1)?c1:c2);
+    }
+    finish_generated("rectangles", pixels, started);
+    return ESP_OK;
+}
+
+esp_err_t prisma_process_run_circles(void)
+{
+    if (!begin_test("circles")) return ESP_ERR_INVALID_STATE;
+    int64_t started = esp_timer_get_time();
+    uint16_t *pixels = new_test_canvas("circles");
+    if (!pixels) return ESP_ERR_NO_MEM;
+    uint16_t c1 = rgb565(40, 215, 215), c2 = rgb565(240, 245, 250);
+    for (int r=14, i=0; r<=105; r+=13, i++) draw_circle(pixels, 120, 120, r, (i&1)?c1:c2);
+    finish_generated("circles", pixels, started);
+    return ESP_OK;
+}
+
+esp_err_t prisma_process_run_triangles(void)
+{
+    if (!begin_test("triangles")) return ESP_ERR_INVALID_STATE;
+    int64_t started = esp_timer_get_time();
+    uint16_t *pixels = new_test_canvas("triangles");
+    if (!pixels) return ESP_ERR_NO_MEM;
+    uint16_t c1 = rgb565(40, 215, 215), c2 = rgb565(240, 245, 250);
+    for (int i=0;i<9;i++) {
+        int inset = 10 + i*10;
+        int x1 = 120, y1 = inset;
+        int x2 = TEST_W-1-inset, y2 = TEST_H-1-inset;
+        int x3 = inset, y3 = TEST_H-1-inset;
+        uint16_t c = (i&1)?c1:c2;
+        draw_line(pixels, TEST_W, TEST_H, x1,y1,x2,y2,c);
+        draw_line(pixels, TEST_W, TEST_H, x2,y2,x3,y3,c);
+        draw_line(pixels, TEST_W, TEST_H, x3,y3,x1,y1,c);
+    }
+    finish_generated("triangles", pixels, started);
     return ESP_OK;
 }
 
