@@ -11,9 +11,21 @@
 
 static const char *TAG = "PRISMA_PROCESS_API";
 
+extern const uint8_t web_process_html_start[] asm("_binary_process_html_start");
+extern const uint8_t web_process_html_end[] asm("_binary_process_html_end");
+
 static bool require_admin(httpd_req_t *r)
 {
     return prisma_admin_authorize(r);
+}
+
+static esp_err_t process_page_get(httpd_req_t *r)
+{
+    if (!require_admin(r)) return ESP_OK;
+    httpd_resp_set_type(r, "text/html");
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+    return httpd_resp_send(r, (const char *)web_process_html_start,
+                           (ssize_t)(web_process_html_end - web_process_html_start));
 }
 
 static esp_err_t send_status_json(httpd_req_t *r)
@@ -106,6 +118,9 @@ static void register_one(httpd_handle_t server, const httpd_uri_t *uri)
 void prisma_process_register_routes(httpd_handle_t server)
 {
     (void)prisma_process_init();
+    static const httpd_uri_t page = {
+        .uri = "/admin/process", .method = HTTP_GET, .handler = process_page_get
+    };
     static const httpd_uri_t poster = {
         .uri = "/api/v1/process/test/poster", .method = HTTP_POST, .handler = poster_post
     };
@@ -119,9 +134,10 @@ void prisma_process_register_routes(httpd_handle_t server)
         .uri = "/api/v1/process/test/result.bmp", .method = HTTP_GET, .handler = result_get
     };
 
+    register_one(server, &page);
     register_one(server, &poster);
     register_one(server, &lines);
     register_one(server, &status);
     register_one(server, &result);
-    ESP_LOGI(TAG, "CORE-4A local processing routes ready");
+    ESP_LOGI(TAG, "CORE-4A local processing routes ready at /admin/process");
 }
