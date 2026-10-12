@@ -14,6 +14,7 @@
 
 #define MAX_TEST_FRAMES 180
 #define MAX_PIXEL_BYTES (512u * 1024u)
+#define SCAN_CHUNK_BYTES 4096u
 
 typedef struct {
     size_t offset;
@@ -21,7 +22,6 @@ typedef struct {
 } frame_ref_t;
 
 static SemaphoreHandle_t g_lock;
-static uint8_t *g_video;
 static size_t g_video_size;
 static frame_ref_t g_frames[MAX_TEST_FRAMES];
 static uint16_t g_frame_count;
@@ -117,6 +117,64 @@ static uint16_t posterize_rgb565(uint16_t c)
     return (uint16_t)((r << 11) | (g << 5) | b);
 }
 
+static esp_err_t index_video_from_flash(size_t total, frame_ref_t *refs, uint16_t *out_count)
+{
+    uint8_t *chunk = malloc(SCAN_CHUNK_BYTES);
+    if (!chunk) return ESP_ERR_NO_MEM;
+
+    bool in_frame = false;
+    size_t soi = 0;
+    uint8_t prev = 0;
+    bool have_prev = false;
+    uint16_t count = 0;
+
+    for (size_t base = 0; base < total && count < MAX_TEST_FRAMES; base += SCAN_CHUNK_BYTES) {
+        size_t len = total - base;
+        if (len > SCAN_CHUNK_BYTES) len = SCAN_CHUNK_BYTES;
+        esp_err_t err = prisma_video_ab_read(base, chunk, len);
+        if (err != ESP_OK) {
+            free(chunk);
+            return err;
+        }
+
+        for (size_t i = 0; i < len && count < MAX_TEST_FRAMES; ++i) {
+            uint8_t cur = chunk[i];
+            size_t pos = base + i;
+            if (have_prev) {
+                if (!in_frame && prev == 0xFF && cur == 0xD8) {
+                    soi = pos - 1;
+                    in_frame = true;
+                } else if (in_frame && prev == 0xFF && cur == 0xD9) {
+                    refs[count].offset = soi;
+                    refs[count].length = (pos + 1) - soi;
+                    count++;
+                    in_frame = false;
+                }
+            }
+            prev = cur;
+            have_prev = true;
+        }
+    }
+
+    free(chunk);
+    *out_count = count;
+    return ESP_OK;
+}
+
+static esp_err_t read_frame(const frame_ref_t *ref, uint8_t **out)
+{
+    if (!ref || !out || ref->length < 4 || ref->offset + ref->length > g_video_size) return ESP_ERR_INVALID_ARG;
+    uint8_t *jpeg = psram_alloc(ref->length);
+    if (!jpeg) return ESP_ERR_NO_MEM;
+    esp_err_t err = prisma_video_ab_read(ref->offset, jpeg, ref->length);
+    if (err != ESP_OK) {
+        free(jpeg);
+        return err;
+    }
+    *out = jpeg;
+    return ESP_OK;
+}
+
 esp_err_t prisma_video_process_prepare(void)
 {
     if (!g_lock && prisma_video_process_init() != ESP_OK) return ESP_ERR_NO_MEM;
@@ -127,54 +185,35 @@ esp_err_t prisma_video_process_prepare(void)
         return ESP_ERR_NOT_FOUND;
     }
 
-    uint8_t *video = psram_alloc(info.size);
-    if (!video) {
-        set_error("not enough PSRAM for VIDEO source");
-        return ESP_ERR_NO_MEM;
-    }
-    esp_err_t err = prisma_video_ab_read(0, video, info.size);
-    if (err != ESP_OK) {
-        free(video);
-        set_error("could not read active VIDEO from flash");
-        return err;
-    }
-
     frame_ref_t refs[MAX_TEST_FRAMES];
     uint16_t count = 0;
-    size_t soi = SIZE_MAX;
-    for (size_t i = 0; i + 1 < info.size; ++i) {
-        if (soi == SIZE_MAX && video[i] == 0xFF && video[i + 1] == 0xD8) {
-            soi = i;
-            i++;
-            continue;
-        }
-        if (soi != SIZE_MAX && video[i] == 0xFF && video[i + 1] == 0xD9) {
-            if (count >= MAX_TEST_FRAMES) break;
-            refs[count].offset = soi;
-            refs[count].length = (i + 2) - soi;
-            count++;
-            soi = SIZE_MAX;
-            i++;
-        }
+    esp_err_t err = index_video_from_flash(info.size, refs, &count);
+    if (err != ESP_OK) {
+        set_error("could not index VIDEO directly from flash");
+        return err;
     }
-
     if (count == 0) {
-        free(video);
         set_error("VIDEO test payload has no complete JPEG frames");
         return ESP_ERR_NOT_SUPPORTED;
     }
 
+    g_video_size = info.size;
+    uint8_t *first = NULL;
+    err = read_frame(&refs[0], &first);
+    if (err != ESP_OK) {
+        set_error("could not read first VIDEO frame from flash");
+        return err;
+    }
+
     uint16_t w = 0, h = 0;
-    if (!baseline_size(video + refs[0].offset, refs[0].length, &w, &h)) {
-        free(video);
+    bool baseline = baseline_size(first, refs[0].length, &w, &h);
+    free(first);
+    if (!baseline) {
         set_error("VIDEO frames must be baseline JPEG");
         return ESP_ERR_NOT_SUPPORTED;
     }
 
     xSemaphoreTake(g_lock, portMAX_DELAY);
-    free(g_video);
-    g_video = video;
-    g_video_size = info.size;
     memcpy(g_frames, refs, count * sizeof(frame_ref_t));
     g_frame_count = count;
     memset(&g_status, 0, sizeof(g_status));
@@ -194,21 +233,29 @@ esp_err_t prisma_video_process_render_frame(uint16_t index)
 {
     if (!g_lock && prisma_video_process_init() != ESP_OK) return ESP_ERR_NO_MEM;
     xSemaphoreTake(g_lock, portMAX_DELAY);
-    bool prepared = g_status.prepared && g_video && index < g_frame_count;
+    bool prepared = g_status.prepared && index < g_frame_count;
     frame_ref_t ref = prepared ? g_frames[index] : (frame_ref_t){0};
     xSemaphoreGive(g_lock);
     if (!prepared) return ESP_ERR_INVALID_ARG;
 
     int64_t started = esp_timer_get_time();
-    const uint8_t *jpeg = g_video + ref.offset;
+    uint8_t *jpeg = NULL;
+    esp_err_t err = read_frame(&ref, &jpeg);
+    if (err != ESP_OK) {
+        set_error("could not read VIDEO frame from flash");
+        return err;
+    }
+
     uint16_t src_w = 0, src_h = 0;
     if (!baseline_size(jpeg, ref.length, &src_w, &src_h)) {
+        free(jpeg);
         set_error("frame is not baseline JPEG");
         return ESP_ERR_NOT_SUPPORTED;
     }
 
     uint8_t div = choose_scale(src_w, src_h);
     if (!div) {
+        free(jpeg);
         set_error("frame too large for processing buffer");
         return ESP_ERR_NO_MEM;
     }
@@ -217,6 +264,7 @@ esp_err_t prisma_video_process_render_frame(uint16_t index)
     size_t out_bytes = (size_t)out_w * out_h * sizeof(uint16_t);
     uint16_t *pixels = psram_alloc(out_bytes);
     if (!pixels) {
+        free(jpeg);
         set_error("not enough PSRAM for decoded frame");
         return ESP_ERR_NO_MEM;
     }
@@ -231,7 +279,8 @@ esp_err_t prisma_video_process_render_frame(uint16_t index)
         .flags = { .swap_color_bytes = 0 },
     };
     esp_jpeg_image_output_t decoded = {0};
-    esp_err_t err = esp_jpeg_decode(&cfg, &decoded);
+    err = esp_jpeg_decode(&cfg, &decoded);
+    free(jpeg);
     if (err != ESP_OK) {
         free(pixels);
         set_error("ESP JPEG decoder failed on VIDEO frame");
