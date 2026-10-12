@@ -1,8 +1,6 @@
 #include "prisma_display.h"
-#include <stdlib.h>
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
-#include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
@@ -20,7 +18,8 @@
 
 static const char *TAG = "PEDAL_DISPLAY";
 static esp_lcd_panel_handle_t s_panel;
-static uint16_t *s_frame;
+/* Keep the exact proven strategy from the working appliance: static DRAM framebuffer. */
+static uint16_t s_frame[LCD_W * LCD_H];
 
 static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
 {
@@ -44,19 +43,13 @@ static void rect(int x, int y, int w, int h, uint16_t c)
 
 static void show(void)
 {
-    if (s_panel && s_frame) {
+    if (s_panel) {
         ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(s_panel, 0, 0, LCD_W, LCD_H, s_frame));
     }
 }
 
 bool prisma_display_init(void)
 {
-    s_frame = heap_caps_malloc(LCD_W * LCD_H * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    if (!s_frame) {
-        ESP_LOGE(TAG, "DMA frame allocation failed");
-        return false;
-    }
-
     gpio_config_t bl = {
         .pin_bit_mask = 1ULL << LCD_PIN_BL,
         .mode = GPIO_MODE_OUTPUT,
@@ -101,13 +94,12 @@ bool prisma_display_init(void)
     rect(0, 0, LCD_W, 8, rgb565(35, 220, 220));
     show();
     gpio_set_level(LCD_PIN_BL, 1);
-    ESP_LOGI(TAG, "ST7789 ready 240x240");
+    ESP_LOGI(TAG, "ST7789 ready 240x240 static framebuffer");
     return true;
 }
 
 void prisma_display_boot_stage(unsigned stage, bool ok)
 {
-    if (!s_frame) return;
     const uint16_t bg = rgb565(4, 7, 12);
     const uint16_t good = rgb565(35, 200, 110);
     const uint16_t bad = rgb565(230, 55, 65);
@@ -122,7 +114,6 @@ void prisma_display_boot_stage(unsigned stage, bool ok)
 
 void prisma_display_touch(uint16_t x, uint16_t y)
 {
-    if (!s_frame) return;
     fill(rgb565(4, 7, 12));
     rect(0, 0, LCD_W, 8, rgb565(35, 220, 220));
     rect((int)x - 4, (int)y - 4, 9, 9, rgb565(255, 35, 150));
@@ -131,7 +122,6 @@ void prisma_display_touch(uint16_t x, uint16_t y)
 
 void prisma_display_swipe(bool left)
 {
-    if (!s_frame) return;
     fill(left ? rgb565(20, 70, 45) : rgb565(55, 25, 85));
     rect(0, 0, LCD_W, 8, rgb565(35, 220, 220));
     show();
