@@ -1,0 +1,50 @@
+name: CORE-2B mDNS discovery test
+
+on:
+  push:
+    branches: [core2b-mdns-discovery]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify CORE-2B discovery contract
+        run: |
+          grep -q 'espressif/mdns' main/idf_component.yml
+          grep -q 'prisma-pi-%02x%02x%02x' main/discovery.c
+          grep -q '"_prisma", "_tcp", 80' main/discovery.c
+          grep -q '"_http", "_tcp", 80' main/discovery.c
+          grep -q 'prisma_discovery_start_task' main/app36.c
+          grep -q 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -q 'video_b,  data, 0x43,    0xB20000,  0x300000' partitions.csv
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core2b_factory.py
+          test "$(stat -c%s dist/PRISMA-PI-PEDAL-CORE2B-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-PEDAL-CORE2B-16MB.bin > dist/PRISMA-PI-PEDAL-CORE2B-16MB.sha256
+
+      - name: Upload CORE-2B
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-pedal-core2b
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-PEDAL-CORE2B-16MB.bin
+            dist/PRISMA-PI-PEDAL-CORE2B-16MB.sha256
+            build/prisma_pi_pedal_core2b.bin
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/storage.bin
