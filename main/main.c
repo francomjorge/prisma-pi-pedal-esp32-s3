@@ -9,6 +9,7 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
 #include "wifi_portal.h"
+#include "network_ui.h"
 #include "prisma_touch.h"
 #include "storage.h"
 
@@ -43,6 +44,8 @@ static int mode_index = 0;
 static int intensity = 61;
 static int glitch_count = 0;
 static bool synth_on = true;
+static bool network_forget_armed = false;
+static int network_forget_ticks = 0;
 static bool effect_enabled[EFFECT_COUNT] = {false, false, false, false, false, true};
 static int effect_value[EFFECT_COUNT] = {50, 50, 50, 50, 50, 50};
 static const char *effect_names[EFFECT_COUNT] = {"PIXEL", "GLITCH", "POSTER", "HUE", "MIRROR", "MIX"};
@@ -102,6 +105,21 @@ static void text_box_center(int x, int w, int y, const char *s, int z, uint16_t 
 static void clear(uint16_t c) { for (int i = 0; i < W * H; i++) frame[i] = c; }
 static void show(void) { ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(panel, 0, 0, W, H, frame)); }
 
+static void lcd_safe_upper(char *dst, size_t cap, const char *src)
+{
+    if (!dst || cap == 0) return;
+    size_t j = 0;
+    if (!src) src = "";
+    while (*src && j + 1 < cap) {
+        char c = *src++;
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        if (c == '_') c = '-';
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.')) c = ' ';
+        dst[j++] = c;
+    }
+    dst[j] = '\0';
+}
+
 static void dots(int page, uint16_t cyan, uint16_t dim)
 {
     int xs[4] = {92,108,124,140};
@@ -148,7 +166,24 @@ static void page_controls(void)
 
 static void page_monitor(void)
 {
-    uint16_t bg=rgb(4,7,12), wh=rgb(240,245,250), cy=rgb(35,220,220), dim=rgb(45,60,75);clear(bg);text_center(48,"VISUAL MONITOR",2,wh);rect(28,82,184,2,cy);text_center(106,"OPEN IN BROWSER",2,wh);text_center(143,"192.168.4.1",2,cy);dots(2,cy,dim);show();
+    prisma_network_snapshot_t net = {0};
+    (void)prisma_network_snapshot(&net);
+    char ssid[34];
+    char host[34];
+    lcd_safe_upper(ssid, sizeof(ssid), net.ssid[0] ? net.ssid : "NO NETWORK");
+    lcd_safe_upper(host, sizeof(host), net.hostname[0] ? net.hostname : "PRISMA-PI.LOCAL");
+
+    uint16_t bg=rgb(4,7,12), wh=rgb(240,245,250), cy=rgb(35,220,220), dim=rgb(45,60,75), blue=rgb(25,65,145), green=rgb(35,200,110), red=rgb(230,55,65);
+    clear(bg);
+    text_center(8,"NETWORK",2,wh);
+    rect(10,30,220,2,cy);
+    text(10,42,"MODE",1,dim);text(64,42,net.mode[0]?net.mode:"STARTING",1,net.connected?green:cy);
+    text(10,62,"SSID",1,dim);text(10,76,ssid,1,wh);
+    text(10,99,"IP",1,dim);text(40,99,net.ip[0]?net.ip:"-",1,cy);
+    text(10,121,"HOST",1,dim);text(10,135,host,1,wh);
+    rect(10,171,100,30,blue);text_box_center(10,100,181,"RESTART",1,wh);
+    rect(126,171,104,30,network_forget_armed?red:dim);text_box_center(126,104,181,network_forget_armed?"CONFIRM":"FORGET",1,wh);
+    dots(2,cy,dim);show();
 }
 
 static void page_effects(void)
@@ -164,7 +199,7 @@ static void page_effects(void)
 static void power_hold(void){gpio_config_t p = {.pin_bit_mask=1ULL<<BAT_POWER_PIN,.mode=GPIO_MODE_OUTPUT};ESP_ERROR_CHECK(gpio_config(&p));ESP_ERROR_CHECK(gpio_set_level(BAT_POWER_PIN,1));}
 static void draw_page(int page, int phase){if (page == 0) page_intro(phase);else if (page == 1) page_controls();else if (page == 2) page_monitor();else page_effects();}
 static void toggle_power(void){bool was = synth_on;synth_on = !synth_on;if (!was && synth_on) mode_index = 1;ESP_LOGI(TAG,"SYNTH -> %s",synth_on?"ON":"OFF");}
-static bool page_needs_input_debounce(int page){return page == 1 || page == 3;}
+static bool page_needs_input_debounce(int page){return page == 1 || page == 2 || page == 3;}
 
 void app_main(void)
 {
@@ -175,17 +210,22 @@ void app_main(void)
     esp_lcd_panel_dev_config_t pc = {.reset_gpio_num=LCD_PIN_RST,.rgb_ele_order=LCD_RGB_ELEMENT_ORDER_RGB,.bits_per_pixel=16};ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io,&pc,&panel));ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));ESP_ERROR_CHECK(esp_lcd_panel_init(panel));ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel,true));ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel,true));
     int phase = 0;page_intro(phase);gpio_set_level(LCD_PIN_BL,1);
     bool touch = prisma_touch_init();ESP_LOGI(TAG,"TOUCH: %s",touch?"READY":"FAILED");prisma_wifi_start();for (int i=0;i<EFFECT_COUNT;i++) prisma_control_set_effect(i,effect_enabled[i]);
-    int page = 0;uint16_t x=0,y=0,startx=0,starty=0;bool down=false;bool input_lock=false;int input_lock_ticks=0;int miss=0,anim=0,home_cooldown=0;
+    int page = 0;uint16_t x=0,y=0,startx=0,starty=0;bool down=false;bool input_lock=false;int input_lock_ticks=0;int miss=0,anim=0,home_cooldown=0,net_refresh=0;
     while (1) {
         if (home_cooldown > 0) home_cooldown--;bool touched = touch && prisma_touch_read(&x,&y);
         if (input_lock) {down=false;miss=0;if (touched) input_lock_ticks=CONTROL_DEBOUNCE_TICKS;else if (input_lock_ticks>0) input_lock_ticks--;else input_lock=false;}
-        else if (touched) {miss=0;if (!down) {startx=x;starty=y;down=true;} else if ((int)startx-(int)x>55 && page<PAGE_COUNT-1) {page++;glitch_count=0;draw_page(page,phase);down=false;if (page_needs_input_debounce(page)) {input_lock=true;input_lock_ticks=CONTROL_DEBOUNCE_TICKS;}} else if ((int)x-(int)startx>55 && page>0) {page--;glitch_count=0;if (page==0) home_cooldown=HOME_COOLDOWN_TICKS;draw_page(page,phase);down=false;if (page_needs_input_debounce(page)) {input_lock=true;input_lock_ticks=CONTROL_DEBOUNCE_TICKS;}}}
+        else if (touched) {miss=0;if (!down) {startx=x;starty=y;down=true;} else if ((int)startx-(int)x>55 && page<PAGE_COUNT-1) {page++;glitch_count=0;if(page!=2){network_forget_armed=false;network_forget_ticks=0;}draw_page(page,phase);down=false;if (page_needs_input_debounce(page)) {input_lock=true;input_lock_ticks=CONTROL_DEBOUNCE_TICKS;}} else if ((int)x-(int)startx>55 && page>0) {page--;glitch_count=0;if(page!=2){network_forget_armed=false;network_forget_ticks=0;}if (page==0) home_cooldown=HOME_COOLDOWN_TICKS;draw_page(page,phase);down=false;if (page_needs_input_debounce(page)) {input_lock=true;input_lock_ticks=CONTROL_DEBOUNCE_TICKS;}}}
         else if (down && ++miss>4) {
             if (page==0 && home_cooldown==0) glitch(startx,starty);
             else if (page==1 && startx>=170 && startx<=232 && starty>=5 && starty<=42) {toggle_power();page_controls();}
             else if (page==1 && startx>=12 && startx<=165 && starty>=45 && starty<=85) {const char *src=prisma_storage_next();prisma_control_set_filename(src);page_controls();ESP_LOGI(TAG,"SOURCE -> %s",src);}
             else if (page==1 && synth_on && startx>=12 && startx<=228 && starty>=106 && starty<=132) {intensity=((int)startx-12)*100/216;if (intensity<0) intensity=0;if (intensity>100) intensity=100;page_controls();ESP_LOGI(TAG,"INTENSITY -> %d",intensity);}
             else if (page==1 && synth_on && startx>=82 && startx<=232 && starty>=139 && starty<=181) {mode_index=mode_index?0:1;page_controls();ESP_LOGI(TAG,"MODE -> %s",mode_index?"BYPASS":"RANDOM");}
+            else if (page==2 && starty>=165 && starty<=210 && startx>=8 && startx<=116) {network_forget_armed=false;network_forget_ticks=0;page_monitor();ESP_LOGW(TAG,"APPLIANCE RESTART requested");prisma_network_restart();}
+            else if (page==2 && starty>=165 && starty<=210 && startx>=120 && startx<=234) {
+                if (!network_forget_armed) {network_forget_armed=true;network_forget_ticks=250;page_monitor();ESP_LOGW(TAG,"FORGET WIFI armed; tap again to confirm");}
+                else {ESP_LOGW(TAG,"FORGET WIFI confirmed from appliance");(void)prisma_network_forget_and_restart();}
+            }
             else if (page==3 && starty>=FX_ROW_Y-6 && starty<FX_ROW_Y-6+EFFECT_COUNT*FX_ROW_STEP) {
                 int effect=((int)starty-(FX_ROW_Y-6))/FX_ROW_STEP;
                 if (effect>=0 && effect<EFFECT_COUNT) {
@@ -197,6 +237,8 @@ void app_main(void)
             }
             down=false;miss=0;
         }
+        if (network_forget_armed && network_forget_ticks > 0) {network_forget_ticks--;if (network_forget_ticks == 0) {network_forget_armed=false;if(page==2)page_monitor();}}
+        if (page==2) {if(++net_refresh>=50){net_refresh=0;page_monitor();}} else net_refresh=0;
         if (page==0 && glitch_count==0 && ++anim>=6) {anim=0;phase=(phase+1)%5;page_intro(phase);}vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
