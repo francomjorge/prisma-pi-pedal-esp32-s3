@@ -16,6 +16,15 @@
 
 static const char HASH_PREFIX[] = "prisma-admin-v1:";
 
+/* Factory password is fixed for onboarding, but plaintext is never stored in source.
+   This digest is SHA-256("prisma-admin-v1:" + factory password). */
+static const uint8_t FACTORY_HASH[ADMIN_HASH_LEN] = {
+    0xc6, 0xb1, 0x59, 0xbf, 0x94, 0xe9, 0x38, 0x2d,
+    0xa7, 0x7b, 0x05, 0x32, 0xa7, 0x36, 0x4f, 0xb8,
+    0x85, 0xac, 0x94, 0xd5, 0xe3, 0xb8, 0xf0, 0x37,
+    0x63, 0xac, 0x2b, 0x6f, 0x42, 0x07, 0x18, 0xe3
+};
+
 static void challenge(httpd_req_t *req)
 {
     httpd_resp_set_status(req, "401 Unauthorized");
@@ -42,14 +51,17 @@ static bool constant_time_equal(const uint8_t *a, const uint8_t *b, size_t len)
     return diff == 0;
 }
 
-static esp_err_t make_device_bootstrap(char *out, size_t out_size)
+static esp_err_t make_legacy_device_hash(uint8_t out[ADMIN_HASH_LEN])
 {
-    if (!out || out_size < 20) return ESP_ERR_INVALID_ARG;
     uint8_t mac[6] = {0};
     esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
     if (err != ESP_OK) return err;
-    int n = snprintf(out, out_size, "Prisma-%02X%02X%02X-R2", mac[3], mac[4], mac[5]);
-    return (n > 0 && (size_t)n < out_size) ? ESP_OK : ESP_ERR_INVALID_SIZE;
+    char legacy[32] = {0};
+    int n = snprintf(legacy, sizeof(legacy), "Prisma-%02X%02X%02X-R2", mac[3], mac[4], mac[5]);
+    if (n <= 0 || (size_t)n >= sizeof(legacy)) return ESP_ERR_INVALID_SIZE;
+    hash_password(legacy, out);
+    memset(legacy, 0, sizeof(legacy));
+    return ESP_OK;
 }
 
 static esp_err_t load_or_init_hash(uint8_t out[ADMIN_HASH_LEN])
@@ -61,14 +73,20 @@ static esp_err_t load_or_init_hash(uint8_t out[ADMIN_HASH_LEN])
     size_t len = ADMIN_HASH_LEN;
     err = nvs_get_blob(h, ADMIN_HASH_KEY, out, &len);
     if (err == ESP_ERR_NVS_NOT_FOUND || len != ADMIN_HASH_LEN) {
-        char bootstrap[32] = {0};
-        err = make_device_bootstrap(bootstrap, sizeof(bootstrap));
-        if (err == ESP_OK) {
-            hash_password(bootstrap, out);
-            memset(bootstrap, 0, sizeof(bootstrap));
+        memcpy(out, FACTORY_HASH, ADMIN_HASH_LEN);
+        err = nvs_set_blob(h, ADMIN_HASH_KEY, out, ADMIN_HASH_LEN);
+        if (err == ESP_OK) err = nvs_commit(h);
+    } else if (err == ESP_OK) {
+        /* Migrate the short-lived per-device R2 bootstrap back to the fixed factory password.
+           User-changed passwords are preserved because they will not match this derived digest. */
+        uint8_t legacy_hash[ADMIN_HASH_LEN] = {0};
+        if (make_legacy_device_hash(legacy_hash) == ESP_OK &&
+            constant_time_equal(out, legacy_hash, ADMIN_HASH_LEN)) {
+            memcpy(out, FACTORY_HASH, ADMIN_HASH_LEN);
             err = nvs_set_blob(h, ADMIN_HASH_KEY, out, ADMIN_HASH_LEN);
             if (err == ESP_OK) err = nvs_commit(h);
         }
+        memset(legacy_hash, 0, sizeof(legacy_hash));
     }
 
     nvs_close(h);
@@ -79,7 +97,7 @@ esp_err_t prisma_admin_set_password(const char *password)
 {
     if (!password) return ESP_ERR_INVALID_ARG;
     size_t len = strlen(password);
-    if (len < 12 || len > 64) return ESP_ERR_INVALID_ARG;
+    if (len < 8 || len > 64) return ESP_ERR_INVALID_ARG;
 
     uint8_t digest[ADMIN_HASH_LEN];
     hash_password(password, digest);
