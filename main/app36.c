@@ -7,6 +7,8 @@
 #include "processed_store.h"
 #include "discovery.h"
 #include "discovery_udp.h"
+#include "wifi_portal.h"
+#include "network_ui.h"
 
 #define BAT_POWER_PIN 2
 
@@ -15,11 +17,17 @@
 #define intensity prisma_shared_intensity
 #define app_main prisma_legacy_main
 
+/* main.c is the physically proven LCD/touch body. Interpose only Wi-Fi start so
+   CORE-5C can keep the PRISMA fallback AP after the proven CORE-2C STA logic. */
+static void prisma_wifi_start_core5c(void);
+#define prisma_wifi_start prisma_wifi_start_core5c
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmisleading-indentation"
 #include "main.c"
 #pragma GCC diagnostic pop
 
+#undef prisma_wifi_start
 #undef app_main
 #undef intensity
 #undef mode_index
@@ -36,6 +44,15 @@ void prisma_storage_init(void) {}
 int prisma_storage_count(void) { return 1; }
 const char *prisma_storage_current(void) { return "IMAGE-A-B"; }
 const char *prisma_storage_next(void) { return "IMAGE-A-B"; }
+
+static void prisma_wifi_start_core5c(void)
+{
+    prisma_wifi_start();
+    esp_err_t err = prisma_network_ensure_fallback_ap();
+    if (err != ESP_OK) {
+        ESP_LOGW(SYNC_TAG, "Fallback AP not armed: %s", esp_err_to_name(err));
+    }
+}
 
 static void prisma_early_power_hold(void)
 {
@@ -66,6 +83,6 @@ void app_main(void)
 
     prisma_discovery_start_task();
     prisma_udp_discovery_start_task();
-    ESP_LOGI(SYNC_TAG, "CORE-5A PRISMA-PI source A/B + processed outputs armed");
+    ESP_LOGI(SYNC_TAG, "CORE-5C PRISMA-PI Wi-Fi hardening + source/output core armed");
     prisma_legacy_main();
 }
