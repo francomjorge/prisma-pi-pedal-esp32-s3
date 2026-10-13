@@ -94,9 +94,9 @@ static esp_err_t wifi_connect_validated_post(httpd_req_t *r)
 
     prisma_wifi_test_result_t test = {0};
     esp_err_t err = prisma_network_test_wifi(ssid_copy, pass_copy, &test);
-    memset(pass_copy, 0, sizeof(pass_copy));
 
     if (err != ESP_OK) {
+        memset(pass_copy, 0, sizeof(pass_copy));
         ESP_LOGE(TAG, "Wi-Fi validation internal error: %s", esp_err_to_name(err));
         httpd_resp_set_status(r, "503 Service Unavailable");
         cJSON *j = cJSON_CreateObject();
@@ -107,6 +107,7 @@ static esp_err_t wifi_connect_validated_post(httpd_req_t *r)
     }
 
     if (!test.connected) {
+        memset(pass_copy, 0, sizeof(pass_copy));
         ESP_LOGW(TAG, "Rejected unvalidated Wi-Fi ssid=%s", ssid_copy);
         httpd_resp_set_status(r, "422 Unprocessable Entity");
         cJSON *j = cJSON_CreateObject();
@@ -120,7 +121,8 @@ static esp_err_t wifi_connect_validated_post(httpd_req_t *r)
 
     /* The password has already been used successfully to associate and obtain
        DHCP. Only now make it persistent. */
-    err = save_wifi_credentials(ssid_copy, pass_text ? pass_text : "");
+    err = save_wifi_credentials(ssid_copy, pass_copy);
+    memset(pass_copy, 0, sizeof(pass_copy));
     if (err != ESP_OK) {
         httpd_resp_set_status(r, "500 Internal Server Error");
         cJSON *j = cJSON_CreateObject();
