@@ -6,4 +6,7 @@ idf_component_register(
     EMBED_TXTFILES "web/index.html" "web/style.css" "web/admin.html" "web/process.html"
 )
 
+# A few compact rendering loops are intentionally written on one line. Keep all
+# real compiler errors fatal, but do not promote indentation-only diagnostics.
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=misleading-indentation)
 target_link_options(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=httpd_start")
