@@ -52,6 +52,10 @@ static void prisma_wifi_start_core5c(void)
     if (err != ESP_OK) {
         ESP_LOGW(SYNC_TAG, "Fallback AP not armed: %s", esp_err_to_name(err));
     }
+
+    /* Start mDNS only after AP/STA topology is final so the responder sees both
+       the common LAN interface and the always-available PRISMA fallback AP. */
+    prisma_discovery_start_task();
 }
 
 static void prisma_early_power_hold(void)
@@ -81,7 +85,6 @@ void app_main(void)
     esp_err_t outputs = prisma_processed_store_init();
     if (outputs != ESP_OK) ESP_LOGW(SYNC_TAG, "Processed output store unavailable: %s", esp_err_to_name(outputs));
 
-    prisma_discovery_start_task();
     prisma_udp_discovery_start_task();
     ESP_LOGI(SYNC_TAG, "CORE-5C PRISMA-PI Wi-Fi hardening + source/output core armed");
     prisma_legacy_main();
