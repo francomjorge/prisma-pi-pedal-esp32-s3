@@ -259,6 +259,55 @@ static esp_err_t wifi_reset_post(httpd_req_t *r)
     return response;
 }
 
+static esp_err_t admin_password_post(httpd_req_t *r)
+{
+    if (!require_admin(r)) return ESP_OK;
+    if (r->content_len <= 0 || r->content_len > 255) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Invalid JSON body");
+        return ESP_FAIL;
+    }
+
+    char body[256];
+    size_t offset = 0;
+    while (offset < (size_t)r->content_len) {
+        int got = httpd_req_recv(r, body + offset, (size_t)r->content_len - offset);
+        if (got == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (got <= 0) return ESP_FAIL;
+        offset += (size_t)got;
+    }
+    body[offset] = '\0';
+
+    cJSON *root = cJSON_Parse(body);
+    memset(body, 0, sizeof(body));
+    if (!root) {
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *new_password = cJSON_GetObjectItemCaseSensitive(root, "new_password");
+    cJSON *confirm_password = cJSON_GetObjectItemCaseSensitive(root, "confirm_password");
+    const char *new_text = cJSON_IsString(new_password) ? new_password->valuestring : NULL;
+    const char *confirm_text = cJSON_IsString(confirm_password) ? confirm_password->valuestring : NULL;
+    size_t pass_len = new_text ? strlen(new_text) : 0;
+
+    if (!new_text || !confirm_text || pass_len < 8 || pass_len > 64 || strcmp(new_text, confirm_text) != 0) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(r, HTTPD_400_BAD_REQUEST, "Password must match and be 8-64 characters");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = prisma_admin_set_password(new_text);
+    cJSON_Delete(root);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(r, HTTPD_500_INTERNAL_SERVER_ERROR, "Could not save admin password");
+        return err;
+    }
+
+    httpd_resp_set_type(r, "application/json");
+    no_cache(r);
+    return httpd_resp_sendstr(r, "{\"ok\":true,\"credentials_changed\":true}");
+}
+
 static esp_err_t image_put(httpd_req_t *r)
 {
     if (!require_admin(r)) return ESP_OK;
@@ -424,6 +473,9 @@ void prisma_admin_register_routes(httpd_handle_t server)
     static const httpd_uri_t storage = {
         .uri = "/api/v1/admin/storage", .method = HTTP_GET, .handler = storage_get
     };
+    static const httpd_uri_t password = {
+        .uri = "/api/v1/admin/password", .method = HTTP_POST, .handler = admin_password_post
+    };
     static const httpd_uri_t scan = {
         .uri = "/api/v1/wifi/scan", .method = HTTP_GET, .handler = wifi_scan_get
     };
@@ -448,6 +500,7 @@ void prisma_admin_register_routes(httpd_handle_t server)
 
     register_one(server, &page);
     register_one(server, &storage);
+    register_one(server, &password);
     register_one(server, &scan);
     register_one(server, &connect);
     register_one(server, &reset);
@@ -456,5 +509,5 @@ void prisma_admin_register_routes(httpd_handle_t server)
     register_one(server, &video_upload);
     register_one(server, &video_remove);
 
-    ESP_LOGI(TAG, "CORE-3B admin routes ready at /admin");
+    ESP_LOGI(TAG, "CORE-4F admin routes ready at /admin");
 }
