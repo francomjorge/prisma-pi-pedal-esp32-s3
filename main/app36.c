@@ -27,6 +27,16 @@
 
 static const char *SYNC_TAG = "WEB_SYNC";
 
+/*
+ * Compatibility bridge for the legacy LCD page. CORE-5A no longer mounts the
+ * old SPIFFS "storage" partition: sources live in transactional IMAGE A/B.
+ * Keep the old UI calls satisfied without reintroducing the retired filesystem.
+ */
+void prisma_storage_init(void) {}
+int prisma_storage_count(void) { return 1; }
+const char *prisma_storage_current(void) { return "IMAGE-A-B"; }
+const char *prisma_storage_next(void) { return "IMAGE-A-B"; }
+
 static void prisma_early_power_hold(void)
 {
     gpio_config_t p = {.pin_bit_mask = 1ULL << BAT_POWER_PIN,.mode = GPIO_MODE_OUTPUT};
