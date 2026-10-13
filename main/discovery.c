@@ -13,17 +13,22 @@
 static const char *TAG = "PRISMA_DISCOVERY";
 static bool s_task_started = false;
 
+static bool netif_has_ip(const char *ifkey)
+{
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey(ifkey);
+    esp_netif_ip_info_t info = {0};
+    return netif && esp_netif_get_ip_info(netif, &info) == ESP_OK && info.ip.addr != 0;
+}
+
 static void discovery_task(void *arg)
 {
     (void)arg;
 
-    esp_netif_ip_info_t ip_info = {0};
-    esp_netif_t *sta = NULL;
-
-    while (1) {
-        sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-        if (sta && esp_netif_get_ip_info(sta, &ip_info) == ESP_OK && ip_info.ip.addr != 0) break;
-        vTaskDelay(pdMS_TO_TICKS(500));
+    /* CORE-2C waited only for STA. That made .local unavailable while the
+       appliance was serving its own setup AP. Start mDNS as soon as either
+       interface has an address; the responder can then serve AP and STA. */
+    while (!netif_has_ip("WIFI_STA_DEF") && !netif_has_ip("WIFI_AP_DEF")) {
+        vTaskDelay(pdMS_TO_TICKS(250));
     }
 
     uint8_t mac[6] = {0};
