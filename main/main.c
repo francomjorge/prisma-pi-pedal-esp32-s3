@@ -175,12 +175,12 @@ static void page_monitor(void)
 
     uint16_t bg=rgb(4,7,12), wh=rgb(240,245,250), cy=rgb(35,220,220), dim=rgb(45,60,75), blue=rgb(25,65,145), green=rgb(35,200,110), red=rgb(230,55,65);
     clear(bg);
-    text_center(8,"NETWORK",2,wh);
-    rect(10,30,220,2,cy);
-    text(10,42,"MODE",1,dim);text(64,42,net.mode[0]?net.mode:"STARTING",1,net.connected?green:cy);
-    text(10,62,"SSID",1,dim);text(10,76,ssid,1,wh);
-    text(10,99,"IP",1,dim);text(40,99,net.ip[0]?net.ip:"-",1,cy);
-    text(10,121,"HOST",1,dim);text(10,135,host,1,wh);
+    text_center(6,"NETWORK",2,wh);
+    rect(10,28,220,2,cy);
+    text(10,38,"MODE",1,dim);text(62,35,net.mode[0]?net.mode:"STARTING",2,net.connected?green:cy);
+    text(10,62,"SSID",1,dim);text(10,74,ssid,2,wh);
+    text(10,100,"IP",1,dim);text(38,96,net.ip[0]?net.ip:"-",2,cy);
+    text(10,126,"HOST",1,dim);text(10,139,host,1,wh);
     rect(10,171,100,30,blue);text_box_center(10,100,181,"RESTART",1,wh);
     rect(126,171,104,30,network_forget_armed?red:dim);text_box_center(126,104,181,network_forget_armed?"CONFIRM":"FORGET",1,wh);
     dots(2,cy,dim);show();
