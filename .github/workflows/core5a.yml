@@ -1,0 +1,65 @@
+name: CORE-5A PRISMA-PI factory
+
+on:
+  push:
+    branches: [factory-next-prisma-pi]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify CORE-5A contract
+        run: |
+          grep -Fq 'CONFIG_SPIRAM=y' sdkconfig
+          grep -Fq 'CONFIG_SPIRAM_MODE_OCT=y' sdkconfig
+          grep -Fq 'factory,       app,  factory, 0x020000,  0x300000' partitions.csv
+          grep -Fq 'video_out,     data, 0x44,    0x320000,  0x300000' partitions.csv
+          grep -Fq 'image_a,       data, 0x40,    0x620000,  0x100000' partitions.csv
+          grep -Fq 'image_b,       data, 0x41,    0x720000,  0x100000' partitions.csv
+          grep -Fq 'video_a,       data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -Fq 'video_b,       data, 0x43,    0xB20000,  0x300000' partitions.csv
+          grep -Fq 'image_out,     data, 0x45,    0xE20000,  0x100000' partitions.csv
+          grep -Fq 'preview_img,   data, 0x46,    0xF20000,  0x020000' partitions.csv
+          grep -Fq 'preview_vid,   data, 0x47,    0xF40000,  0x0C0000' partitions.csv
+          grep -Fq 'processed_store.c' main/CMakeLists.txt
+          grep -Fq 'PRISMA_POSTER_PRESET_166' main/poster_config.h
+          grep -Fq 'PRISMA_POSTER_PRESET_720' main/poster_config.h
+          grep -Fq 'PRISMA_POSTER_ASPECT_9_16' main/poster_config.h
+          grep -Fq 'PRISMA_PROCESSED_VIDEO_PREVIEW' main/video_process.c
+          grep -Fq 'PRISMA-P<span>I' main/web/admin.html || grep -Fq 'PRISMA<span>-PI' main/web/admin.html
+          grep -Fq 'CHANGE ADMIN PASSWORD' main/web/admin.html
+          ! grep -R -Fq 'Basic UHJpc21hLVA6UHJpc21hLVA=' main
+          test "$(stat -c%s build/prisma_pi_pedal_core5a.bin)" -lt $((3*1024*1024))
+
+      - name: Create deterministic 16 MB factory
+        run: |
+          python3 tools/make_core5a_factory.py
+          test "$(stat -c%s dist/PRISMA-PI-CORE5A-FACTORY-16MB.bin)" -eq 16777216
+          sha256sum dist/PRISMA-PI-CORE5A-FACTORY-16MB.bin > dist/PRISMA-PI-CORE5A-FACTORY-16MB.sha256
+          cp build/prisma_pi_pedal_core5a.bin dist/PRISMA-PI-CORE5A-app.bin
+          sha256sum dist/PRISMA-PI-CORE5A-app.bin > dist/PRISMA-PI-CORE5A-app.sha256
+
+      - name: Upload CORE-5A
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-core5a-factory
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-CORE5A-FACTORY-16MB.bin
+            dist/PRISMA-PI-CORE5A-FACTORY-16MB.sha256
+            dist/PRISMA-PI-CORE5A-app.bin
+            dist/PRISMA-PI-CORE5A-app.sha256
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
