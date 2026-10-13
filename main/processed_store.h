@@ -17,6 +17,7 @@ typedef enum {
 typedef enum {
     PRISMA_PROCESSED_FMT_INDEX8 = 1,
     PRISMA_PROCESSED_FMT_VIDEO_INDEX8 = 2,
+    PRISMA_PROCESSED_FMT_RGB565 = 3,
 } prisma_processed_format_t;
 
 typedef struct {
