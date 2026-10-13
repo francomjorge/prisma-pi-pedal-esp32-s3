@@ -36,7 +36,10 @@ jobs:
           grep -Fq 'POSTER64-INDEX8' main/video_process.c
           grep -Fq 'mbedtls_base64_decode' main/admin_auth.c
           grep -Fq 'load_or_init_hash' main/admin_auth.c
-          grep -Fq 'ADMIN_HASH_KEY' main/admin_auth.c
+          grep -Fq 'FACTORY_HASH' main/admin_auth.c
+          grep -Fq '/api/v1/admin/password' main/admin_api.c
+          grep -Fq 'CHANGE ADMIN PASSWORD' main/web/admin.html
+          grep -Fq 'prisma_admin_set_password' main/admin_api.c
           ! grep -R -Fq 'PRISMA_ADMIN_PASSWORD' main
           ! grep -R -Fq 'Basic UHJpc21hLVA6UHJpc21hLVA=' main
           grep -Fq 'video_a,  data, 0x42,    0x820000,  0x300000' partitions.csv
