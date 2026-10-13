@@ -86,7 +86,8 @@ esp_err_t prisma_network_snapshot(prisma_network_snapshot_t *out)
         }
     }
 
-    if (out->connected) strlcpy(out->mode, "CONNECTED", sizeof(out->mode));
+    if (out->connected && mode == WIFI_MODE_APSTA) strlcpy(out->mode, "STA+AP", sizeof(out->mode));
+    else if (out->connected) strlcpy(out->mode, "CONNECTED", sizeof(out->mode));
     else if (out->provisioning) strlcpy(out->mode, "AP SETUP", sizeof(out->mode));
     else strlcpy(out->mode, "OFFLINE", sizeof(out->mode));
 
@@ -155,7 +156,7 @@ esp_err_t prisma_network_test_wifi(const char *ssid, const char *password,
     candidate.sta.pmf_cfg.capable = true;
     candidate.sta.pmf_cfg.required = false;
 
-    /* Our prisma_net NVS is the source of truth. Do not persist an unvalidated
+    /* prisma_net NVS is the source of truth. Never persist an unvalidated
        candidate in the Wi-Fi driver's own storage. */
     (void)esp_wifi_set_storage(WIFI_STORAGE_RAM);
 
