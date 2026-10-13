@@ -1,7 +1,9 @@
+#include <stdio.h>
 #include <string.h>
 
 #include "admin_auth.h"
 
+#include "esp_mac.h"
 #include "mbedtls/base64.h"
 #include "mbedtls/sha256.h"
 #include "nvs.h"
@@ -13,15 +15,6 @@
 #define ADMIN_DECODED_MAX 96
 
 static const char HASH_PREFIX[] = "prisma-admin-v1:";
-
-/* Bootstrap password is NOT stored in source. Only this salted SHA-256 digest is compiled in.
-   The plaintext bootstrap password is distributed out-of-band and can later be replaced in NVS. */
-static const uint8_t BOOTSTRAP_HASH[ADMIN_HASH_LEN] = {
-    0x01, 0xcf, 0x9a, 0xaf, 0x56, 0x59, 0x70, 0xe0,
-    0x3e, 0x50, 0x5a, 0x30, 0x6e, 0x72, 0x4d, 0xac,
-    0xae, 0x24, 0xef, 0x5e, 0x6c, 0x89, 0xa0, 0x41,
-    0xd5, 0xab, 0x7f, 0x5a, 0xd3, 0xa8, 0xdc, 0x3e
-};
 
 static void challenge(httpd_req_t *req)
 {
@@ -49,6 +42,16 @@ static bool constant_time_equal(const uint8_t *a, const uint8_t *b, size_t len)
     return diff == 0;
 }
 
+static esp_err_t make_device_bootstrap(char *out, size_t out_size)
+{
+    if (!out || out_size < 20) return ESP_ERR_INVALID_ARG;
+    uint8_t mac[6] = {0};
+    esp_err_t err = esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    if (err != ESP_OK) return err;
+    int n = snprintf(out, out_size, "Prisma-%02X%02X%02X-R2", mac[3], mac[4], mac[5]);
+    return (n > 0 && (size_t)n < out_size) ? ESP_OK : ESP_ERR_INVALID_SIZE;
+}
+
 static esp_err_t load_or_init_hash(uint8_t out[ADMIN_HASH_LEN])
 {
     nvs_handle_t h;
@@ -58,9 +61,14 @@ static esp_err_t load_or_init_hash(uint8_t out[ADMIN_HASH_LEN])
     size_t len = ADMIN_HASH_LEN;
     err = nvs_get_blob(h, ADMIN_HASH_KEY, out, &len);
     if (err == ESP_ERR_NVS_NOT_FOUND || len != ADMIN_HASH_LEN) {
-        memcpy(out, BOOTSTRAP_HASH, ADMIN_HASH_LEN);
-        err = nvs_set_blob(h, ADMIN_HASH_KEY, out, ADMIN_HASH_LEN);
-        if (err == ESP_OK) err = nvs_commit(h);
+        char bootstrap[32] = {0};
+        err = make_device_bootstrap(bootstrap, sizeof(bootstrap));
+        if (err == ESP_OK) {
+            hash_password(bootstrap, out);
+            memset(bootstrap, 0, sizeof(bootstrap));
+            err = nvs_set_blob(h, ADMIN_HASH_KEY, out, ADMIN_HASH_LEN);
+            if (err == ESP_OK) err = nvs_commit(h);
+        }
     }
 
     nvs_close(h);
@@ -123,8 +131,8 @@ bool prisma_admin_authorize(httpd_req_t *req)
     const char *username = (const char *)decoded;
     const char *password = separator + 1;
 
-    uint8_t expected[ADMIN_HASH_LEN];
-    uint8_t actual[ADMIN_HASH_LEN];
+    uint8_t expected[ADMIN_HASH_LEN] = {0};
+    uint8_t actual[ADMIN_HASH_LEN] = {0};
     bool ok = false;
 
     if (strcmp(username, PRISMA_ADMIN_USERNAME) == 0 && load_or_init_hash(expected) == ESP_OK) {
