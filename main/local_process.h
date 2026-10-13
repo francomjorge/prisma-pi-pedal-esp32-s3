@@ -32,3 +32,4 @@ esp_err_t prisma_process_run_circles(void);
 esp_err_t prisma_process_run_triangles(void);
 esp_err_t prisma_process_get_status(prisma_process_status_t *out);
 esp_err_t prisma_process_send_bmp(httpd_req_t *req);
+esp_err_t prisma_process_send_preview_bmp(httpd_req_t *req);
