@@ -13,17 +13,24 @@
 static const char *TAG = "PRISMA_DISCOVERY";
 static bool s_task_started = false;
 
+static bool netif_has_ipv4(esp_netif_t *netif)
+{
+    if (!netif) return false;
+    esp_netif_ip_info_t ip = {0};
+    return esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr != 0;
+}
+
 static void discovery_task(void *arg)
 {
     (void)arg;
 
-    esp_netif_ip_info_t ip_info = {0};
     esp_netif_t *sta = NULL;
-
+    esp_netif_t *ap = NULL;
     while (1) {
         sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-        if (sta && esp_netif_get_ip_info(sta, &ip_info) == ESP_OK && ip_info.ip.addr != 0) break;
-        vTaskDelay(pdMS_TO_TICKS(500));
+        ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+        if (netif_has_ipv4(sta) || netif_has_ipv4(ap)) break;
+        vTaskDelay(pdMS_TO_TICKS(250));
     }
 
     uint8_t mac[6] = {0};
@@ -37,8 +44,11 @@ static void discovery_task(void *arg)
     char instance[64];
     char device_id[20];
     snprintf(hostname, sizeof(hostname), "prisma-pi-%02x%02x%02x", mac[3], mac[4], mac[5]);
-    snprintf(instance, sizeof(instance), "PRISMA-Pi Pedal %02X%02X%02X", mac[3], mac[4], mac[5]);
+    snprintf(instance, sizeof(instance), "PRISMA-PI Pedal %02X%02X%02X", mac[3], mac[4], mac[5]);
     snprintf(device_id, sizeof(device_id), "PRP-%02X%02X%02X", mac[3], mac[4], mac[5]);
+
+    if (sta) (void)esp_netif_set_hostname(sta, hostname);
+    if (ap) (void)esp_netif_set_hostname(ap, hostname);
 
     esp_err_t err = mdns_init();
     if (err != ESP_OK) {
@@ -75,7 +85,8 @@ static void discovery_task(void *arg)
         ESP_LOGW(TAG, "_http service not published: %s", esp_err_to_name(err));
     }
 
-    ESP_LOGI(TAG, "READY http://%s.local service=_prisma._tcp id=%s udp=4210", hostname, device_id);
+    ESP_LOGI(TAG, "READY http://%s.local service=_prisma._tcp id=%s udp=4210 sta=%s ap=%s",
+             hostname, device_id, netif_has_ipv4(sta) ? "yes" : "no", netif_has_ipv4(ap) ? "yes" : "no");
     vTaskDelete(NULL);
 }
 
