@@ -1,0 +1,66 @@
+name: CORE-5C Wi-Fi hardening
+
+on:
+  push:
+    branches: [core5c-wifi-hardening]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ESP32-S3 firmware
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32s3
+          path: .
+          command: idf.py build
+
+      - name: Verify CORE-5C contract
+        run: |
+          grep -Fq 'CONFIG_SPIRAM=y' sdkconfig
+          grep -Fq 'CONFIG_SPIRAM_MODE_OCT=y' sdkconfig
+          grep -Fq 'factory,       app,  factory, 0x020000,  0x300000' partitions.csv
+          grep -Fq 'video_out,     data, 0x44,    0x320000,  0x300000' partitions.csv
+          grep -Fq 'image_a,       data, 0x40,    0x620000,  0x100000' partitions.csv
+          grep -Fq 'image_b,       data, 0x41,    0x720000,  0x100000' partitions.csv
+          grep -Fq 'video_a,       data, 0x42,    0x820000,  0x300000' partitions.csv
+          grep -Fq 'video_b,       data, 0x43,    0xB20000,  0x300000' partitions.csv
+          grep -Fq 'image_out,     data, 0x45,    0xE20000,  0x100000' partitions.csv
+          grep -Fq 'preview_img,   data, 0x46,    0xF20000,  0x020000' partitions.csv
+          grep -Fq 'preview_vid,   data, 0x47,    0xF40000,  0x0C0000' partitions.csv
+          grep -Fq 'admin_wifi_harden.c' main/CMakeLists.txt
+          grep -Fq 'prisma_network_test_wifi' main/network_ui.c
+          grep -Fq 'WIFI_MODE_APSTA' main/network_ui.c
+          grep -Fq 'STA+AP' main/network_ui.c
+          grep -Fq 'Password or network validation failed; settings were not saved' main/admin_wifi_harden.c
+          grep -Fq 'WIFI_AP_DEF' main/discovery.c
+          grep -Fq 'CORE-5C PRISMA-PI Wi-Fi hardening' main/app36.c
+          test "$(stat -c%s build/prisma_pi_pedal_core5a.bin)" -lt $((3*1024*1024))
+
+      - name: Create CORE-5C artifacts
+        run: |
+          mkdir -p dist
+          python3 tools/make_core5a_factory.py
+          cp dist/PRISMA-PI-CORE5A-FACTORY-16MB.bin dist/PRISMA-PI-CORE5C-WIFI-FACTORY-16MB.bin
+          sha256sum dist/PRISMA-PI-CORE5C-WIFI-FACTORY-16MB.bin > dist/PRISMA-PI-CORE5C-WIFI-FACTORY-16MB.sha256
+          cp build/prisma_pi_pedal_core5a.bin dist/PRISMA-PI-CORE5C-WIFI-app.bin
+          sha256sum dist/PRISMA-PI-CORE5C-WIFI-app.bin > dist/PRISMA-PI-CORE5C-WIFI-app.sha256
+          test "$(stat -c%s dist/PRISMA-PI-CORE5C-WIFI-FACTORY-16MB.bin)" -eq 16777216
+
+      - name: Upload CORE-5C
+        uses: actions/upload-artifact@v4
+        with:
+          name: prisma-pi-core5c-wifi
+          if-no-files-found: error
+          path: |
+            dist/PRISMA-PI-CORE5C-WIFI-FACTORY-16MB.bin
+            dist/PRISMA-PI-CORE5C-WIFI-FACTORY-16MB.sha256
+            dist/PRISMA-PI-CORE5C-WIFI-app.bin
+            dist/PRISMA-PI-CORE5C-WIFI-app.sha256
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
