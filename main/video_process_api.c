@@ -5,6 +5,7 @@
 
 #include "admin_auth.h"
 #include "cJSON.h"
+#include "stream_control.h"
 #include "video_process.h"
 
 #include "esp_http_server.h"
@@ -33,6 +34,7 @@ static esp_err_t send_status(httpd_req_t *r)
     cJSON_AddNumberToObject(j,"last_frame_ms",s.last_frame_ms);
     cJSON_AddNumberToObject(j,"pixel_bytes",s.pixel_bytes);
     cJSON_AddNumberToObject(j,"free_psram",s.free_psram);
+    cJSON_AddBoolToObject(j,"appliance_stream",prisma_appliance_stream_enabled());
     char *txt = cJSON_PrintUnformatted(j);
     cJSON_Delete(j);
     if(!txt) return ESP_ERR_NO_MEM;
@@ -41,6 +43,23 @@ static esp_err_t send_status(httpd_req_t *r)
     err=httpd_resp_sendstr(r,txt);
     cJSON_free(txt);
     return err;
+}
+
+static esp_err_t appliance_stream_get(httpd_req_t *r)
+{
+    char query[64]={0}, val[16]={0};
+    if(httpd_req_get_url_query_str(r,query,sizeof(query))==ESP_OK &&
+       httpd_query_key_value(query,"enabled",val,sizeof(val))==ESP_OK){
+        bool enabled = !strcmp(val,"1") || !strcmp(val,"true") || !strcmp(val,"on");
+        prisma_appliance_stream_set(enabled);
+        ESP_LOGI(TAG,"APPLIANCE STREAM -> %s",enabled?"ON":"OFF");
+    }
+    char body[64];
+    snprintf(body,sizeof(body),"{\"ok\":true,\"enabled\":%s}",
+             prisma_appliance_stream_enabled()?"true":"false");
+    httpd_resp_set_type(r,"application/json");
+    httpd_resp_set_hdr(r,"Cache-Control","no-store");
+    return httpd_resp_sendstr(r,body);
 }
 
 static esp_err_t prepare_get(httpd_req_t *r)
@@ -80,6 +99,7 @@ static esp_err_t frame_get(httpd_req_t *r)
 static esp_err_t video_dispatch_get(httpd_req_t *r)
 {
     if(!auth(r)) return ESP_OK;
+    if(strstr(r->uri,"/appliance-stream")!=NULL) return appliance_stream_get(r);
     if(strncmp(r->uri, "/api/v1/process/test/video/prepare", 34)==0) return prepare_get(r);
     if(strncmp(r->uri, "/api/v1/process/test/video/status", 33)==0) return send_status(r);
     if(strncmp(r->uri, "/api/v1/process/test/video/frame.bmp", 36)==0) return frame_get(r);
