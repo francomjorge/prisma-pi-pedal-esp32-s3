@@ -2,7 +2,7 @@ name: CORE-5A PRISMA-PI factory
 
 on:
   push:
-    branches: [factory-next-prisma-pi]
+    branches: [factory-next-prisma-pi, core5d-jpeg-common]
   workflow_dispatch:
 
 jobs:
