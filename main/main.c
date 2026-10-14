@@ -12,6 +12,7 @@
 #include "network_ui.h"
 #include "prisma_touch.h"
 #include "storage.h"
+#include "appliance_results.h"
 
 #define LCD_HOST SPI2_HOST
 #define W 240
@@ -26,7 +27,7 @@
 
 #define HOME_COOLDOWN_TICKS 25
 #define CONTROL_DEBOUNCE_TICKS 10
-#define PAGE_COUNT 4
+#define PAGE_COUNT 6
 #define EFFECT_COUNT 6
 
 #define FX_LABEL_X 10
@@ -122,8 +123,12 @@ static void lcd_safe_upper(char *dst, size_t cap, const char *src)
 
 static void dots(int page, uint16_t cyan, uint16_t dim)
 {
-    int xs[4] = {92,108,124,140};
-    for (int i = 0; i < PAGE_COUNT; i++) rect(xs[i], 224, 8, 8, i == page ? cyan : dim);
+    const int size = 6;
+    const int gap = 8;
+    int total = PAGE_COUNT * size + (PAGE_COUNT - 1) * gap;
+    int x0 = (W - total) / 2;
+    for (int i = 0; i < PAGE_COUNT; i++)
+        rect(x0 + i * (size + gap), 226, size, size, i == page ? cyan : dim);
 }
 
 static void logo_title(int y, int phase)
@@ -196,21 +201,43 @@ static void page_effects(void)
     dots(3,synth_on?cy:disabled,dim);show();
 }
 
+static void page_image_result(void)
+{
+    uint16_t bg=rgb(4,7,12), wh=rgb(240,245,250), cy=rgb(35,220,220), dim=rgb(45,60,75);
+    uint16_t sw=0,sh=0;
+    esp_err_t err=prisma_appliance_render_image_result(frame,W,H,&sw,&sh);
+    if(err!=ESP_OK){clear(bg);text_center(88,"NO IMAGE OUT",2,dim);text_center(116,"PROCESS IMAGE",1,wh);}
+    rect(0,0,W,17,bg);text_center(5,"IMAGE OUT",1,wh);
+    if(err==ESP_OK){char res[24];snprintf(res,sizeof(res),"%uX%u",sw,sh);rect(0,208,W,32,bg);text(6,211,res,1,cy);}
+    dots(4,cy,dim);show();
+}
+
+static void page_generator_result(void)
+{
+    uint16_t bg=rgb(4,7,12), wh=rgb(240,245,250), cy=rgb(35,220,220), dim=rgb(45,60,75);
+    char name[20]={0};
+    esp_err_t err=prisma_appliance_render_generator_result(frame,W,H,name,sizeof(name));
+    if(err!=ESP_OK){clear(bg);text_center(88,"NO GENERATOR",2,dim);text_center(116,"RUN ONE IN WEB",1,wh);}
+    char upper[20];lcd_safe_upper(upper,sizeof(upper),name[0]?name:"GENERATOR");
+    rect(0,0,W,17,bg);text_center(5,upper,1,wh);
+    rect(0,216,W,24,bg);dots(5,cy,dim);show();
+}
+
 static void power_hold(void){gpio_config_t p = {.pin_bit_mask=1ULL<<BAT_POWER_PIN,.mode=GPIO_MODE_OUTPUT};ESP_ERROR_CHECK(gpio_config(&p));ESP_ERROR_CHECK(gpio_set_level(BAT_POWER_PIN,1));}
-static void draw_page(int page, int phase){if (page == 0) page_intro(phase);else if (page == 1) page_controls();else if (page == 2) page_monitor();else page_effects();}
+static void draw_page(int page, int phase){if (page == 0) page_intro(phase);else if (page == 1) page_controls();else if (page == 2) page_monitor();else if (page == 3) page_effects();else if(page==4)page_image_result();else page_generator_result();}
 static void toggle_power(void){bool was = synth_on;synth_on = !synth_on;if (!was && synth_on) mode_index = 1;ESP_LOGI(TAG,"SYNTH -> %s",synth_on?"ON":"OFF");}
 static bool page_needs_input_debounce(int page){return page == 1 || page == 2 || page == 3;}
 
 void app_main(void)
 {
-    power_hold();ESP_LOGI(TAG,"PRISMA-PI LITE M4.2I PAGE2 DEBOUNCE + COMPACT PAGE4");
+    power_hold();ESP_LOGI(TAG,"PRISMA-PI LITE CORE-5F VIDEO RESTORE + RESULT PAGES");
     gpio_config_t bl = {.pin_bit_mask=1ULL<<LCD_PIN_BL,.mode=GPIO_MODE_OUTPUT};ESP_ERROR_CHECK(gpio_config(&bl));gpio_set_level(LCD_PIN_BL,0);
     spi_bus_config_t bus = {.sclk_io_num=LCD_PIN_SCLK,.mosi_io_num=LCD_PIN_MOSI,.miso_io_num=-1,.quadwp_io_num=-1,.quadhd_io_num=-1,.max_transfer_sz=W*40*2};ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST,&bus,SPI_DMA_CH_AUTO));
     esp_lcd_panel_io_handle_t io = NULL;esp_lcd_panel_io_spi_config_t ioc = {.dc_gpio_num=LCD_PIN_DC,.cs_gpio_num=LCD_PIN_CS,.pclk_hz=40000000,.lcd_cmd_bits=8,.lcd_param_bits=8,.spi_mode=0,.trans_queue_depth=10};ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST,&ioc,&io));
     esp_lcd_panel_dev_config_t pc = {.reset_gpio_num=LCD_PIN_RST,.rgb_ele_order=LCD_RGB_ELEMENT_ORDER_RGB,.bits_per_pixel=16};ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io,&pc,&panel));ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));ESP_ERROR_CHECK(esp_lcd_panel_init(panel));ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel,true));ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel,true));
     int phase = 0;page_intro(phase);gpio_set_level(LCD_PIN_BL,1);
     bool touch = prisma_touch_init();ESP_LOGI(TAG,"TOUCH: %s",touch?"READY":"FAILED");prisma_wifi_start();for (int i=0;i<EFFECT_COUNT;i++) prisma_control_set_effect(i,effect_enabled[i]);
-    int page = 0;uint16_t x=0,y=0,startx=0,starty=0;bool down=false;bool input_lock=false;int input_lock_ticks=0;int miss=0,anim=0,home_cooldown=0,net_refresh=0;
+    int page = 0;uint16_t x=0,y=0,startx=0,starty=0;bool down=false;bool input_lock=false;int input_lock_ticks=0;int miss=0,anim=0,home_cooldown=0,net_refresh=0,result_refresh=0;
     while (1) {
         if (home_cooldown > 0) home_cooldown--;bool touched = touch && prisma_touch_read(&x,&y);
         if (input_lock) {down=false;miss=0;if (touched) input_lock_ticks=CONTROL_DEBOUNCE_TICKS;else if (input_lock_ticks>0) input_lock_ticks--;else input_lock=false;}
@@ -239,6 +266,7 @@ void app_main(void)
         }
         if (network_forget_armed && network_forget_ticks > 0) {network_forget_ticks--;if (network_forget_ticks == 0) {network_forget_armed=false;if(page==2)page_monitor();}}
         if (page==2) {if(++net_refresh>=50){net_refresh=0;page_monitor();}} else net_refresh=0;
+        if (page==4 || page==5) {if(++result_refresh>=25){result_refresh=0;draw_page(page,phase);}} else result_refresh=0;
         if (page==0 && glitch_count==0 && ++anim>=6) {anim=0;phase=(phase+1)%5;page_intro(phase);}vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
