@@ -1,11 +1,11 @@
 #include "poster_config.h"
 
+#include <limits.h>
 #include <string.h>
 
 #include "nvs.h"
 
 #define NS "poster_cfg"
-#define AUTO_MAX 720u
 
 static bool preset_valid(prisma_poster_preset_t p)
 {
@@ -83,7 +83,7 @@ static uint16_t scaled(uint32_t n, uint32_t d)
     if (!d) return 1;
     uint32_t v = (n + d / 2u) / d;
     if (v < 1u) v = 1u;
-    if (v > 720u) v = 720u;
+    if (v > UINT16_MAX) v = UINT16_MAX;
     return (uint16_t)v;
 }
 
@@ -99,11 +99,11 @@ bool prisma_poster_resolve_output(prisma_poster_preset_t preset,
 
     uint16_t source_major = source_width > source_height ? source_width : source_height;
     uint16_t major = preset == PRISMA_POSTER_PRESET_AUTO
-                   ? (source_major > AUTO_MAX ? AUTO_MAX : source_major)
+                   ? source_major
                    : (uint16_t)preset;
 
     if (aspect == PRISMA_POSTER_ASPECT_SOURCE) {
-        if (preset == PRISMA_POSTER_PRESET_AUTO && source_major <= AUTO_MAX) {
+        if (preset == PRISMA_POSTER_PRESET_AUTO) {
             *out_width = source_width;
             *out_height = source_height;
             return true;
@@ -141,7 +141,7 @@ uint32_t prisma_poster_config_hash(const prisma_poster_config_t *cfg, bool video
     uint32_t h = 2166136261u;
     uint32_t values[4] = {
         0x504F5354u,
-        1u,
+        2u,
         video ? (uint32_t)cfg->video_preset : (uint32_t)cfg->image_preset,
         video ? (uint32_t)cfg->video_aspect : (uint32_t)cfg->image_aspect,
     };
