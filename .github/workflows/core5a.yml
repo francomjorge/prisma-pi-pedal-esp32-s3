@@ -2,7 +2,7 @@ name: CORE-5A PRISMA-PI factory
 
 on:
   push:
-    branches: [factory-next-prisma-pi, core5d-jpeg-common, core5e-adaptive-media, core5f-video-restore-display, core5g-video-core4d-appliance]
+    branches: [factory-next-prisma-pi, core5d-jpeg-common, core5e-adaptive-media, core5f-video-restore-display, core5g-video-core4d-appliance, core5g-r1-stream-control]
   workflow_dispatch:
 
 jobs:
@@ -20,7 +20,7 @@ jobs:
           path: .
           command: idf.py build
 
-      - name: Verify CORE-5G contract
+      - name: Verify CORE-5G R1 contract
         run: |
           grep -Fq 'CONFIG_SPIRAM=y' sdkconfig
           grep -Fq 'CONFIG_SPIRAM_MODE_OCT=y' sdkconfig
@@ -36,16 +36,18 @@ jobs:
           grep -Fq 'processed_store.c' main/CMakeLists.txt
           grep -Fq 'jpeg_adaptive_wrap.c' main/CMakeLists.txt
           grep -Fq 'video_process.c' main/CMakeLists.txt
+          grep -Fq 'stream_control.c' main/CMakeLists.txt
           grep -Fq 'appliance_results.c' main/CMakeLists.txt
           grep -Fq 'appliance_video.c' main/CMakeLists.txt
           grep -Fq 'index_video_from_flash' main/video_process.c
           grep -Fq 'prisma_video_process_render_frame' main/video_process.c
           grep -Fq 'prisma_video_process_copy_scaled_rgb565' main/video_process.c
-          grep -Fq 'frame.bmp' main/video_process_api.c
-          grep -Fq 'PRISMA_VIDEO_ACTIVE.bin' main/wifi_guard.c
+          grep -Fq 'appliance-stream' main/video_process_api.c
+          grep -Fq 'APPLIANCE STREAM: OFF' main/web/process.html
+          grep -Fq 'WEB STREAM: OFF' main/web/process.html
           grep -Fq 'PAGE_COUNT 7' main/main.c
           grep -Fq 'page_video_result' main/main.c
-          grep -Fq 'CORE-4D FLASH STREAM' main/web/process.html
+          grep -Fq 'PRISMA_VIDEO_ACTIVE.bin' main/wifi_guard.c
           grep -Fq 'PRISMA-P<span>I' main/web/admin.html || grep -Fq 'PRISMA<span>-PI' main/web/admin.html
           grep -Fq 'CHANGE ADMIN PASSWORD' main/web/admin.html
           ! grep -R -Fq 'Basic UHJpc21hLVA6UHJpc21hLVA=' main
@@ -59,10 +61,10 @@ jobs:
           cp build/prisma_pi_pedal_core5a.bin dist/PRISMA-PI-CORE5A-app.bin
           sha256sum dist/PRISMA-PI-CORE5A-app.bin > dist/PRISMA-PI-CORE5A-app.sha256
 
-      - name: Upload CORE-5G
+      - name: Upload CORE-5G R1
         uses: actions/upload-artifact@v4
         with:
-          name: prisma-pi-core5g-factory
+          name: prisma-pi-core5g-r1-factory
           if-no-files-found: error
           path: |
             dist/PRISMA-PI-CORE5A-FACTORY-16MB.bin
