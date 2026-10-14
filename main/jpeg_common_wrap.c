@@ -267,7 +267,7 @@ static esp_err_t decode_progressive(const uint8_t *jpeg, size_t jpeg_size,
         size_t pixels = (size_t)est.out_w * (size_t)est.out_h;
         if (pixels >= budget) return ESP_ERR_NO_MEM;
         size_t decoder_limit = budget - pixels;
-        if (est.peak_alloc <= decoder_limit && cfg.mem_limit <= decoder_limit) break;
+        if (est.alloc_bytes <= decoder_limit && cfg.mem_limit <= decoder_limit) break;
         cfg.mem_limit = decoder_limit;
     }
     if (le != LOWZAG_OK) {
