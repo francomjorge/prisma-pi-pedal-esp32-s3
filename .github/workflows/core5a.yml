@@ -2,7 +2,7 @@ name: CORE-5A PRISMA-PI factory
 
 on:
   push:
-    branches: [factory-next-prisma-pi, core5d-jpeg-common]
+    branches: [factory-next-prisma-pi, core5d-jpeg-common, core5e-adaptive-media]
   workflow_dispatch:
 
 jobs:
@@ -34,10 +34,12 @@ jobs:
           grep -Fq 'preview_img,   data, 0x46,    0xF20000,  0x020000' partitions.csv
           grep -Fq 'preview_vid,   data, 0x47,    0xF40000,  0x0C0000' partitions.csv
           grep -Fq 'processed_store.c' main/CMakeLists.txt
+          grep -Fq 'jpeg_adaptive_wrap.c' main/CMakeLists.txt
+          grep -Fq 'video_process_adaptive.c' main/CMakeLists.txt
           grep -Fq 'PRISMA_POSTER_PRESET_166' main/poster_config.h
           grep -Fq 'PRISMA_POSTER_PRESET_720' main/poster_config.h
           grep -Fq 'PRISMA_POSTER_ASPECT_9_16' main/poster_config.h
-          grep -Fq 'PRISMA_PROCESSED_VIDEO_PREVIEW' main/video_process.c
+          grep -Fq 'PRISMA_PROCESSED_VIDEO_PREVIEW' main/video_process_adaptive.c
           grep -Fq 'PRISMA-P<span>I' main/web/admin.html || grep -Fq 'PRISMA<span>-PI' main/web/admin.html
           grep -Fq 'CHANGE ADMIN PASSWORD' main/web/admin.html
           ! grep -R -Fq 'Basic UHJpc21hLVA6UHJpc21hLVA=' main
