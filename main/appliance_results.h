@@ -17,10 +17,13 @@ esp_err_t prisma_appliance_render_generator_result(uint16_t *dst,
                                                    char *generator_name,
                                                    size_t generator_name_size);
 
-esp_err_t prisma_appliance_prepare_video(uint16_t *frame_count);
+/* VIDEO appliance page is playback-only. It never triggers source MJPEG
+ * processing; it opens the preprocessed PREVIEW cache if one exists. */
+esp_err_t prisma_appliance_prepare_video(uint16_t *frame_count,
+                                         uint32_t *frame_interval_ms);
 esp_err_t prisma_appliance_render_video_frame(uint16_t *dst,
                                               uint16_t dst_width,
                                               uint16_t dst_height,
                                               uint16_t frame_index,
                                               uint16_t *frame_count,
-                                              uint32_t *process_ms);
+                                              uint32_t *frame_interval_ms);
