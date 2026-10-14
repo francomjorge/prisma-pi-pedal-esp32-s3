@@ -8,6 +8,7 @@
 
 #include "local_process.h"
 #include "processed_store.h"
+#include "stream_control.h"
 
 static char s_last_generator[16];
 
@@ -36,6 +37,39 @@ static void fill(uint16_t *dst, uint16_t w, uint16_t h, uint16_t color)
     for (size_t i = 0; i < n; ++i) dst[i] = color;
 }
 
+static void fill_rect(uint16_t *dst, uint16_t w, uint16_t h,
+                      int x, int y, int rw, int rh, uint16_t color)
+{
+    if (!dst) return;
+    for (int yy = y; yy < y + rh; ++yy) {
+        if (yy < 0 || yy >= h) continue;
+        for (int xx = x; xx < x + rw; ++xx) {
+            if (xx < 0 || xx >= w) continue;
+            dst[(size_t)yy * w + xx] = color;
+        }
+    }
+}
+
+void prisma_appliance_overlay_dots(uint16_t *dst,
+                                   uint16_t dst_width,
+                                   uint16_t dst_height,
+                                   uint8_t page_index,
+                                   uint8_t page_count)
+{
+    if (!dst || !dst_width || dst_height < 8 || !page_count) return;
+    const int size = 5;
+    const int gap = 7;
+    const int total = page_count * size + (page_count - 1) * gap;
+    const int x0 = ((int)dst_width - total) / 2;
+    const int y = (int)dst_height - 13;
+    uint16_t active = lcd_rgb(35, 220, 220);
+    uint16_t dim = lcd_rgb(45, 60, 75);
+    for (uint8_t i = 0; i < page_count; ++i)
+        fill_rect(dst, dst_width, dst_height,
+                  x0 + i * (size + gap), y, size, size,
+                  i == page_index ? active : dim);
+}
+
 esp_err_t prisma_appliance_render_image_result(uint16_t *dst,
                                                uint16_t dst_width,
                                                uint16_t dst_height,
@@ -43,13 +77,22 @@ esp_err_t prisma_appliance_render_image_result(uint16_t *dst,
                                                uint16_t *source_height)
 {
     if (!dst || !dst_width || !dst_height) return ESP_ERR_INVALID_ARG;
+    if (source_width) *source_width = 0;
+    if (source_height) *source_height = 0;
+
+    if (!prisma_appliance_stream_enabled()) {
+        fill(dst, dst_width, dst_height, lcd_rgb(4, 7, 12));
+        prisma_appliance_overlay_dots(dst, dst_width, dst_height, 4, 7);
+        return ESP_OK;
+    }
 
     prisma_processed_info_t info = {0};
     esp_err_t err = prisma_processed_get_info(PRISMA_PROCESSED_IMAGE_OUT, &info);
     if (err != ESP_OK || !info.valid || info.format != PRISMA_PROCESSED_FMT_INDEX8 ||
         !info.width || !info.height) {
         fill(dst, dst_width, dst_height, lcd_rgb(4, 7, 12));
-        return ESP_ERR_NOT_FOUND;
+        prisma_appliance_overlay_dots(dst, dst_width, dst_height, 4, 7);
+        return ESP_OK;
     }
 
     if (source_width) *source_width = info.width;
@@ -71,7 +114,11 @@ esp_err_t prisma_appliance_render_image_result(uint16_t *dst,
 
     uint8_t *row = heap_caps_malloc(info.width, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!row) row = malloc(info.width);
-    if (!row) return ESP_ERR_NO_MEM;
+    if (!row) {
+        fill(dst, dst_width, dst_height, lcd_rgb(4, 7, 12));
+        prisma_appliance_overlay_dots(dst, dst_width, dst_height, 4, 7);
+        return ESP_OK;
+    }
 
     uint16_t last_sy = UINT16_MAX;
     for (uint16_t y = 0; y < fit_h; ++y) {
@@ -94,7 +141,9 @@ esp_err_t prisma_appliance_render_image_result(uint16_t *dst,
     }
 
     free(row);
-    return err;
+    if (err != ESP_OK) fill(dst, dst_width, dst_height, lcd_rgb(4, 7, 12));
+    prisma_appliance_overlay_dots(dst, dst_width, dst_height, 4, 7);
+    return ESP_OK;
 }
 
 static void plot(uint16_t *dst, int w, int h, int x, int y, uint16_t c)
@@ -169,12 +218,19 @@ esp_err_t prisma_appliance_render_generator_result(uint16_t *dst,
                                                    size_t generator_name_size)
 {
     if (!dst || !dst_width || !dst_height) return ESP_ERR_INVALID_ARG;
+    if (generator_name && generator_name_size) generator_name[0] = '\0';
+
+    if (!prisma_appliance_stream_enabled()) {
+        fill(dst, dst_width, dst_height, lcd_rgb(4, 7, 12));
+        prisma_appliance_overlay_dots(dst, dst_width, dst_height, 5, 7);
+        return ESP_OK;
+    }
 
     remember_generator();
     if (!s_last_generator[0]) {
         fill(dst, dst_width, dst_height, lcd_rgb(4, 7, 12));
-        if (generator_name && generator_name_size) generator_name[0] = '\0';
-        return ESP_ERR_NOT_FOUND;
+        prisma_appliance_overlay_dots(dst, dst_width, dst_height, 5, 7);
+        return ESP_OK;
     }
 
     if (generator_name && generator_name_size)
@@ -223,5 +279,6 @@ esp_err_t prisma_appliance_render_generator_result(uint16_t *dst,
         }
     }
 
+    prisma_appliance_overlay_dots(dst, dst_width, dst_height, 5, 7);
     return ESP_OK;
 }
