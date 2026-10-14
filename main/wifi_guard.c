@@ -17,6 +17,8 @@
 #include "esp_wifi.h"
 #include "nvs.h"
 
+#include "video_ab.h"
+
 static const char *TAG = "PRISMA_WIFI_GUARD";
 static bool s_initialized = false;
 
@@ -51,6 +53,43 @@ static esp_err_t read_body(httpd_req_t *r, char *dst, size_t cap)
     }
     dst[off] = '\0';
     return ESP_OK;
+}
+
+static esp_err_t downloadable_video_get(httpd_req_t *r)
+{
+    prisma_video_info_t info = {0};
+    esp_err_t err = prisma_video_ab_get_info(&info);
+    if (err != ESP_OK || !info.valid || !info.size) {
+        httpd_resp_send_err(r, HTTPD_404_NOT_FOUND, "No active VIDEO");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(r, "application/octet-stream");
+    httpd_resp_set_hdr(r, "Content-Disposition", "attachment; filename=\"PRISMA_VIDEO_ACTIVE.bin\"");
+    no_cache(r);
+
+    char size_text[24];
+    snprintf(size_text, sizeof(size_text), "%u", (unsigned)info.size);
+    httpd_resp_set_hdr(r, "X-Prisma-Source-Bytes", size_text);
+    char crc_text[16];
+    snprintf(crc_text, sizeof(crc_text), "%08lx", (unsigned long)info.crc32);
+    httpd_resp_set_hdr(r, "X-Prisma-CRC32", crc_text);
+
+    uint8_t buf[1024];
+    size_t offset = 0;
+    while (offset < info.size) {
+        size_t take = info.size - offset;
+        if (take > sizeof(buf)) take = sizeof(buf);
+        err = prisma_video_ab_read(offset, buf, take);
+        if (err != ESP_OK) {
+            (void)httpd_resp_send_chunk(r, NULL, 0);
+            return err;
+        }
+        err = httpd_resp_send_chunk(r, (const char *)buf, take);
+        if (err != ESP_OK) return err;
+        offset += take;
+    }
+    return httpd_resp_send_chunk(r, NULL, 0);
 }
 
 static esp_err_t save_credentials(const char *ssid, const char *password)
@@ -230,6 +269,13 @@ esp_err_t __wrap_httpd_register_uri_handler(httpd_handle_t handle, const httpd_u
         (void)prisma_wifi_guard_init();
         ESP_LOGI(TAG, "Replacing legacy SAVE-first Wi-Fi handler with validate-first handler");
         return __real_httpd_register_uri_handler(handle, &guarded);
+    }
+    if (uri_handler->method == HTTP_GET && uri_handler->uri &&
+        strcmp(uri_handler->uri, "/api/v1/video") == 0) {
+        httpd_uri_t download = *uri_handler;
+        download.handler = downloadable_video_get;
+        ESP_LOGI(TAG, "VIDEO GET armed as downloadable PRISMA_VIDEO_ACTIVE.bin");
+        return __real_httpd_register_uri_handler(handle, &download);
     }
     return __real_httpd_register_uri_handler(handle, uri_handler);
 }
